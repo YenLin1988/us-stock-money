@@ -96,6 +96,19 @@ streamlit run US_STOCK_MONEY.py
 
 The dashboard opens at `http://localhost:8501`.
 
+## Streamlit Cloud Deployment
+
+Use these settings on Streamlit Community Cloud:
+
+| Setting | Value |
+|---|---|
+| Repository | `YenLin1988/us-stock-money` |
+| Branch | `main` |
+| Main file path | `US_STOCK_MONEY.py` |
+| Python runtime | `python-3.11` |
+
+No secrets are required for the default Yahoo Finance data source.
+
 ## Project Structure
 
 ```text
