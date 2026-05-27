@@ -57,6 +57,71 @@ def theme_group_scores(theme_scores: Mapping[str, float], groups: Mapping[str, s
     return result
 
 
+def build_top_recommendations(component_rows, theme_scores: Mapping[str, float], limit: int = 5) -> list[dict[str, object]]:
+    """Rank component tickers by their own flow plus the strength of related themes."""
+    recommendations = []
+    for row in _iter_records(component_rows):
+        themes = [theme.strip() for theme in str(row.get("themes", "")).split(",") if theme.strip()]
+        related_theme_scores = [float(theme_scores[theme]) for theme in themes if theme in theme_scores]
+        theme_boost = sum(related_theme_scores) / len(related_theme_scores) if related_theme_scores else 0.0
+        flow_score = float(row.get("flow_score", 0.0))
+        composite_score = (flow_score * 0.7) + (theme_boost * 0.3)
+        recommendations.append(
+            {
+                "ticker": row.get("ticker", ""),
+                "themes": ", ".join(themes),
+                "flow_score": flow_score,
+                "theme_score": theme_boost,
+                "composite_score": composite_score,
+                "return_5d": float(row.get("return_5d", 0.0)),
+                "return_20d": float(row.get("return_20d", 0.0)),
+                "relative_5d": float(row.get("relative_5d", 0.0)),
+                "dollar_volume_trend": float(row.get("dollar_volume_trend", 0.0)),
+                "volume_zscore": float(row.get("volume_zscore", 0.0)),
+                "reason": recommendation_reason(row, theme_boost),
+            }
+        )
+    return sorted(recommendations, key=lambda item: float(item["composite_score"]), reverse=True)[:limit]
+
+
+def recommendation_reason(row: Mapping[str, object], theme_score: float) -> str:
+    reasons = []
+    flow_score = float(row.get("flow_score", 0.0))
+    return_5d = float(row.get("return_5d", 0.0))
+    return_20d = float(row.get("return_20d", 0.0))
+    relative_5d = float(row.get("relative_5d", 0.0))
+    dollar_volume_trend = float(row.get("dollar_volume_trend", 0.0))
+    volume_zscore = float(row.get("volume_zscore", 0.0))
+
+    if flow_score >= 80:
+        reasons.append(f"flow score is very strong at {flow_score:.1f}/100")
+    elif flow_score >= 65:
+        reasons.append(f"flow score is positive at {flow_score:.1f}/100")
+    else:
+        reasons.append(f"flow score is improving but not extended at {flow_score:.1f}/100")
+
+    if relative_5d > 0:
+        reasons.append(f"outperforming SPY by {relative_5d:+.1f}% over 5D")
+    if return_20d > 0:
+        reasons.append(f"20D momentum is {return_20d:+.1f}%")
+    elif return_5d > 0:
+        reasons.append(f"short-term 5D momentum is {return_5d:+.1f}%")
+    if dollar_volume_trend > 0:
+        reasons.append(f"dollar volume trend is {dollar_volume_trend:+.1f}%")
+    if volume_zscore > 0.75:
+        reasons.append(f"volume is elevated at {volume_zscore:+.1f} z-score")
+    if theme_score >= 70:
+        reasons.append(f"related theme basket is strong at {theme_score:.1f}/100")
+
+    return "; ".join(reasons[:4]) + "."
+
+
+def _iter_records(rows):
+    if hasattr(rows, "to_dict"):
+        return rows.to_dict("records")
+    return rows
+
+
 def broad_flow_score(sector_scores: Mapping[str, float]) -> float:
     if not sector_scores:
         return 0.0

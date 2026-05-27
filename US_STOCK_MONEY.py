@@ -10,7 +10,7 @@ import streamlit as st
 
 from us_stock_money.alerts import evaluate_alerts
 from us_stock_money.market_data import benchmark_table, build_component_table, build_sector_table, build_theme_table, download_prices
-from us_stock_money.scoring import broad_flow_score, classify_regime, flow_delta, theme_group_scores
+from us_stock_money.scoring import broad_flow_score, build_top_recommendations, classify_regime, flow_delta, theme_group_scores
 from us_stock_money.storage import HistoryStore
 
 
@@ -85,6 +85,7 @@ def main() -> None:
             "regime": regime.name,
         }
     )
+    recommendations = build_top_recommendations(component_df, theme_scores, limit=5)
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Regime", regime.name)
@@ -93,6 +94,49 @@ def main() -> None:
     col4.metric("Healthcare / Automation", f"{defensive:.1f}/100")
 
     st.divider()
+
+    st.subheader("Top 5 Flow Candidates")
+    st.caption("Ranked by component money-flow score plus related theme strength. Research signal only, not financial advice.")
+    rec_cols = st.columns(5)
+    for col, rec in zip(rec_cols, recommendations, strict=False):
+        with col:
+            st.markdown(
+                f"""
+                <div class="flow-card">
+                    <div class="small-label">#{recommendations.index(rec) + 1} Flow Candidate</div>
+                    <h3 style="margin: 0.2rem 0 0.1rem 0;">{rec["ticker"]}</h3>
+                    <div class="small-label">{rec["themes"]}</div>
+                    <p style="font-size: 1.35rem; margin: 0.6rem 0 0.2rem 0;">{float(rec["composite_score"]):.1f}</p>
+                    <div class="small-label">Composite score</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+    rec_display = pd.DataFrame(recommendations)
+    if not rec_display.empty:
+        for column in ["return_5d", "return_20d", "relative_5d", "dollar_volume_trend"]:
+            rec_display[column] = rec_display[column].map(fmt_pct)
+        for column in ["flow_score", "theme_score", "composite_score", "volume_zscore"]:
+            rec_display[column] = rec_display[column].map(lambda x: f"{x:.1f}")
+        st.dataframe(
+            rec_display[
+                [
+                    "ticker",
+                    "themes",
+                    "composite_score",
+                    "flow_score",
+                    "theme_score",
+                    "return_5d",
+                    "return_20d",
+                    "relative_5d",
+                    "dollar_volume_trend",
+                    "volume_zscore",
+                    "reason",
+                ]
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
 
     left, right = st.columns([1.4, 1])
     with left:

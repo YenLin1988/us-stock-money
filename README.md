@@ -67,6 +67,17 @@ The app estimates money flow using public market data:
 
 Because free public data does not provide official real-time fund flows, this project uses market-implied flow proxies. It is best read as a thematic rotation radar, not a complete institutional flow tape.
 
+## Top 5 Flow Candidates
+
+The dashboard ranks five component stocks or ETFs by combining:
+
+- the component's own money-flow score
+- the average strength of its related theme baskets
+- recent momentum and relative strength versus SPY
+- dollar-volume and volume-confirmation signals
+
+These candidates are research signals only. They are not buy/sell instructions.
+
 ## Regimes
 
 | Regime | Condition | Meaning |

@@ -25,6 +25,15 @@ The app estimates thematic money movement by combining:
 
 The output is a market-implied money flow radar, not official ETF creation/redemption or institutional order-flow data.
 
+## Recommendation Layer
+
+`build_top_recommendations` ranks component stocks and ETFs by a composite score:
+
+- 70% component flow score
+- 30% average related theme score
+
+The generated reason text explains the strongest available evidence, such as relative strength versus SPY, 20D momentum, dollar-volume trend, elevated volume, and related theme strength.
+
 ## Theme Basket Method
 
 Each theme is a manually curated basket in `THEME_BASKETS`.

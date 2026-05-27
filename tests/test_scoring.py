@@ -3,6 +3,7 @@ import unittest
 
 from us_stock_money.scoring import (
     broad_flow_score,
+    build_top_recommendations,
     classify_regime,
     flow_delta,
     group_scores,
@@ -59,6 +60,33 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(classify_regime(50, 45, 65).name, "Defensive Rotation")
         self.assertEqual(classify_regime(40, 35, 45).name, "Broad Distribution")
         self.assertEqual(classify_regime(52, 53, 52).name, "Mixed Rotation")
+
+    def test_top_recommendations_include_reasons(self):
+        rows = [
+            {
+                "ticker": "MU",
+                "themes": "Memory / HBM",
+                "flow_score": 90,
+                "return_5d": 4,
+                "return_20d": 10,
+                "relative_5d": 3,
+                "dollar_volume_trend": 20,
+                "volume_zscore": 1.2,
+            },
+            {
+                "ticker": "XLV",
+                "themes": "Medical / Devices",
+                "flow_score": 50,
+                "return_5d": 1,
+                "return_20d": 2,
+                "relative_5d": -1,
+                "dollar_volume_trend": -5,
+                "volume_zscore": 0,
+            },
+        ]
+        recs = build_top_recommendations(rows, {"Memory / HBM": 85, "Medical / Devices": 45}, limit=1)
+        self.assertEqual(recs[0]["ticker"], "MU")
+        self.assertIn("flow score", recs[0]["reason"])
 
     def test_flow_delta_uses_last_record_before_cutoff(self):
         now = datetime.datetime(2026, 5, 27, 12, 0)
