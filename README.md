@@ -1,12 +1,35 @@
 # US STOCK MONEY
 
-**US Equity Sector Money Flow Radar** - a Streamlit dashboard for tracking where money is moving across major US stock market sectors.
+**US Thematic Money Flow Radar** - a Streamlit dashboard for tracking where money is moving across high-conviction US-listed themes.
 
 This project follows the same monitoring logic as AI Bubble Monitor: collect market data, convert noisy signals into normalized 0-100 scores, classify the current regime, archive history, and optionally trigger alerts.
 
-## What It Tracks
+## What It Tracks Now
 
-The dashboard monitors sector ETFs as liquid proxies for US equity money flow:
+The dashboard is built around thematic baskets instead of only classic sectors:
+
+| Theme | Example Proxies |
+|---|---|
+| Memory / HBM | MU, WDC, STX, RMBS, SIMO |
+| Optical Communication | COHR, LITE, CIEN, FN, AAOI |
+| Electric Power / Grid | CEG, VST, NEE, ETN, PWR, GEV, GNRC |
+| CPU / Advanced Packaging | AMD, INTC, ARM, TSM, AMKR, ASML, AMAT, KLAC |
+| Space | RKLB, ASTS, LUNR, IRDM, PL, VSAT |
+| Drones / Autonomy | AVAV, KTOS, RCAT, ONDS, LMT, NOC |
+| Rare Earth / Strategic Metals | REMX, MP, UUUU, LAC, ALB, SCCO |
+| Nuclear Energy | NLR, URA, CCJ, CEG, BWXT, OKLO, SMR, LEU, VST |
+| Medical / Devices | XLV, IHI, ISRG, ABT, SYK, BSX, TMO, MDT |
+| AI Infrastructure | NVDA, AVGO, ANET, VRT, DELL, SMCI, ETN |
+| AI Software / Data | MSFT, PLTR, SNOW, MDB, NOW, ORCL |
+| Cybersecurity | PANW, CRWD, ZS, NET, FTNT, S |
+| Robotics / Automation | BOTZ, ISRG, TER, ROK, SYM, HON |
+| Defense / Aerospace | ITA, LMT, RTX, NOC, GD, HWM |
+
+Traditional sector ETFs remain available as a reference tab.
+
+## Sector Reference
+
+The app also monitors sector ETFs as liquid proxies for classic US equity sector rotation:
 
 | Sector | ETF |
 |---|---|
@@ -36,21 +59,20 @@ Benchmark and style proxies:
 
 The app estimates money flow using public market data:
 
-- price momentum over 1D, 5D, and 20D windows
+- basket-level price momentum over 1D, 5D, and 20D windows
 - relative strength versus SPY
 - dollar volume intensity
 - volume z-score versus recent history
-- risk-on versus defensive sector leadership
-- growth versus value rotation
+- theme-group leadership across AI compute, energy/materials, defense/space, software/security, and healthcare/automation
 
-Because free public data does not provide official real-time fund flows, this project uses market-implied flow proxies. It is best read as a sector rotation radar, not a complete institutional flow tape.
+Because free public data does not provide official real-time fund flows, this project uses market-implied flow proxies. It is best read as a thematic rotation radar, not a complete institutional flow tape.
 
 ## Regimes
 
 | Regime | Condition | Meaning |
 |---|---|---|
-| Risk-On Accumulation | Broad flow positive and cyclical/risk sectors lead | Money is moving into growth, tech, discretionary, and higher-beta assets |
-| Defensive Rotation | Defensive leadership strong while broad flow is still stable | Money is hiding in staples, utilities, health care, or low-beta sectors |
+| Risk-On Accumulation | Broad flow positive and AI compute/risk themes lead | Money is moving into growth, AI, infrastructure, and higher-beta assets |
+| Defensive Rotation | Healthcare/automation leadership strong while broad flow is still stable | Money is hiding in steadier or quality growth themes |
 | Broad Distribution | Broad flow negative and defensive demand is not enough | Equity market outflows / de-risking pressure |
 | Mixed Rotation | No dominant flow regime | Choppy sector rotation, wait for confirmation |
 
@@ -69,7 +91,7 @@ The dashboard opens at `http://localhost:8501`.
 us-stock-money/
   US_STOCK_MONEY.py             # Main Streamlit dashboard
   us_stock_money/
-    model_config.py             # Sector universe, weights, thresholds
+    model_config.py             # Theme baskets, sector reference universe, weights, thresholds
     scoring.py                  # Flow score, regime, decomposition helpers
     market_data.py              # Yahoo Finance data collection
     alerts.py                   # Deterministic alert rules

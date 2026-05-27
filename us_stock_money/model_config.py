@@ -16,6 +16,73 @@ SECTOR_ETFS = {
     "XLRE": "Real Estate",
 }
 
+THEME_BASKETS = {
+    "Memory / HBM": {
+        "description": "DRAM, NAND, storage, and high-bandwidth memory proxies",
+        "tickers": ["MU", "WDC", "STX", "RMBS", "SIMO"],
+    },
+    "Optical Communication": {
+        "description": "AI data-center optical networking and transport equipment",
+        "tickers": ["COHR", "LITE", "CIEN", "FN", "AAOI"],
+    },
+    "Electric Power / Grid": {
+        "description": "Power generation, grid equipment, electrification, and AI data-center power demand",
+        "tickers": ["CEG", "VST", "NEE", "ETN", "PWR", "GEV", "GNRC"],
+    },
+    "CPU / Advanced Packaging": {
+        "description": "CPU designers, foundry, packaging, and semiconductor equipment",
+        "tickers": ["AMD", "INTC", "ARM", "TSM", "AMKR", "ASML", "AMAT", "KLAC"],
+    },
+    "Space": {
+        "description": "Launch, satellites, space connectivity, and geospatial intelligence",
+        "tickers": ["RKLB", "ASTS", "LUNR", "IRDM", "PL", "VSAT"],
+    },
+    "Drones / Autonomy": {
+        "description": "Unmanned systems, defense autonomy, and tactical aerospace",
+        "tickers": ["AVAV", "KTOS", "RCAT", "ONDS", "LMT", "NOC"],
+    },
+    "Rare Earth / Strategic Metals": {
+        "description": "Rare earths, uranium/critical minerals, lithium, and strategic materials",
+        "tickers": ["REMX", "MP", "UUUU", "LAC", "ALB", "SCCO"],
+    },
+    "Nuclear Energy": {
+        "description": "Uranium, nuclear utilities, reactors, fuel cycle, and nuclear services",
+        "tickers": ["NLR", "URA", "CCJ", "CEG", "BWXT", "OKLO", "SMR", "LEU", "VST"],
+    },
+    "Medical / Devices": {
+        "description": "Healthcare, medical devices, diagnostics, and surgical robotics",
+        "tickers": ["XLV", "IHI", "ISRG", "ABT", "SYK", "BSX", "TMO", "MDT"],
+    },
+    "AI Infrastructure": {
+        "description": "AI accelerators, networking, servers, and data-center electrical infrastructure",
+        "tickers": ["NVDA", "AVGO", "ANET", "VRT", "DELL", "SMCI", "ETN"],
+    },
+    "AI Software / Data": {
+        "description": "Enterprise AI software, data platforms, cloud software, and analytics",
+        "tickers": ["MSFT", "PLTR", "SNOW", "MDB", "NOW", "ORCL"],
+    },
+    "Cybersecurity": {
+        "description": "Cloud, endpoint, identity, and network security",
+        "tickers": ["PANW", "CRWD", "ZS", "NET", "FTNT", "S"],
+    },
+    "Robotics / Automation": {
+        "description": "Industrial automation, surgical robotics, warehouse automation, and applied robotics",
+        "tickers": ["BOTZ", "ISRG", "TER", "ROK", "SYM", "HON"],
+    },
+    "Defense / Aerospace": {
+        "description": "Prime defense contractors, aerospace suppliers, and defense ETF proxy",
+        "tickers": ["ITA", "LMT", "RTX", "NOC", "GD", "HWM"],
+    },
+}
+
+THEME_GROUPS = {
+    "AI Compute Chain": {"Memory / HBM", "Optical Communication", "CPU / Advanced Packaging", "AI Infrastructure"},
+    "Energy / Materials": {"Electric Power / Grid", "Rare Earth / Strategic Metals", "Nuclear Energy"},
+    "Defense / Space": {"Space", "Drones / Autonomy", "Defense / Aerospace"},
+    "Software / Security": {"AI Software / Data", "Cybersecurity"},
+    "Healthcare / Automation": {"Medical / Devices", "Robotics / Automation"},
+}
+
 BENCHMARKS = {
     "SPY": "S&P 500",
     "QQQ": "Nasdaq 100",

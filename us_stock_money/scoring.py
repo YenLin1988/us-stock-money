@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import datetime as dt
 from typing import Mapping
 
-from .model_config import FLOW_WEIGHTS, GROUPS
+from .model_config import FLOW_WEIGHTS, GROUPS, THEME_GROUPS
 
 
 @dataclass(frozen=True)
@@ -45,6 +45,14 @@ def group_scores(sector_scores: Mapping[str, float], groups: Mapping[str, set[st
     result: dict[str, float] = {}
     for group, tickers in groups.items():
         available = [sector_scores[ticker] for ticker in tickers if ticker in sector_scores]
+        result[group] = sum(available) / len(available) if available else 0.0
+    return result
+
+
+def theme_group_scores(theme_scores: Mapping[str, float], groups: Mapping[str, set[str]] = THEME_GROUPS) -> dict[str, float]:
+    result: dict[str, float] = {}
+    for group, themes in groups.items():
+        available = [theme_scores[theme] for theme in themes if theme in theme_scores]
         result[group] = sum(available) / len(available) if available else 0.0
     return result
 

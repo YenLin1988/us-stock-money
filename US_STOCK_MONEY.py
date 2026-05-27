@@ -9,8 +9,8 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from us_stock_money.alerts import evaluate_alerts
-from us_stock_money.market_data import benchmark_table, build_sector_table, download_prices
-from us_stock_money.scoring import broad_flow_score, classify_regime, flow_delta, group_scores
+from us_stock_money.market_data import benchmark_table, build_component_table, build_sector_table, build_theme_table, download_prices
+from us_stock_money.scoring import broad_flow_score, classify_regime, flow_delta, theme_group_scores
 from us_stock_money.storage import HistoryStore
 
 
@@ -35,9 +35,9 @@ st.markdown(
 
 
 @st.cache_data(ttl=900)
-def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
+def load_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     data = download_prices()
-    return build_sector_table(data), benchmark_table(data)
+    return build_theme_table(data), build_component_table(data), build_sector_table(data), benchmark_table(data)
 
 
 def fmt_pct(value: float) -> str:
@@ -46,19 +46,19 @@ def fmt_pct(value: float) -> str:
 
 def main() -> None:
     st.title("US STOCK MONEY")
-    st.caption("US equity sector money-flow radar powered by public Yahoo Finance market data.")
+    st.caption("US thematic money-flow radar: AI compute chain, power, defense, space, rare earths, nuclear, medical, and other rotation themes.")
 
     try:
-        sector_df, bench_df = load_data()
+        theme_df, component_df, sector_df, bench_df = load_data()
     except Exception as exc:  # pragma: no cover - Streamlit runtime display
         st.error(f"Could not load market data: {exc}")
         return
 
-    sector_scores = dict(zip(sector_df["ticker"], sector_df["flow_score"], strict=False))
-    groups = group_scores(sector_scores)
-    broad = broad_flow_score(sector_scores)
-    risk_on = groups.get("Risk-On", 0.0)
-    defensive = groups.get("Defensive", 0.0)
+    theme_scores = dict(zip(theme_df["theme"], theme_df["flow_score"], strict=False))
+    groups = theme_group_scores(theme_scores)
+    broad = broad_flow_score(theme_scores)
+    risk_on = groups.get("AI Compute Chain", 0.0)
+    defensive = groups.get("Healthcare / Automation", 0.0)
     regime = classify_regime(broad, risk_on, defensive)
 
     store = HistoryStore(Path("data/flow_history.sqlite3"))
@@ -69,8 +69,8 @@ def main() -> None:
         "risk_on_score": round(risk_on, 2),
         "defensive_score": round(defensive, 2),
         "regime": regime.name,
-        "leaders": sector_df.head(3)[["ticker", "sector", "flow_score"]].to_dict("records"),
-        "laggards": sector_df.tail(3)[["ticker", "sector", "flow_score"]].to_dict("records"),
+        "leaders": theme_df.head(3)[["theme", "flow_score", "top_component"]].to_dict("records"),
+        "laggards": theme_df.tail(3)[["theme", "flow_score", "weak_component"]].to_dict("records"),
     }
     store.upsert_record(record)
     history = store.load_history()
@@ -89,24 +89,25 @@ def main() -> None:
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Regime", regime.name)
     col2.metric("Broad Flow", f"{broad:.1f}/100", None if delta_24h is None else f"{delta_24h:+.1f} 24H")
-    col3.metric("Risk-On", f"{risk_on:.1f}/100")
-    col4.metric("Defensive", f"{defensive:.1f}/100")
+    col3.metric("AI Compute Chain", f"{risk_on:.1f}/100")
+    col4.metric("Healthcare / Automation", f"{defensive:.1f}/100")
 
     st.divider()
 
     left, right = st.columns([1.4, 1])
     with left:
         fig = px.bar(
-            sector_df,
-            x="ticker",
+            theme_df,
+            x="theme",
             y="flow_score",
             color="flow_score",
-            hover_data=["sector", "return_1d", "return_5d", "return_20d", "relative_5d", "dollar_volume_m"],
+            hover_data=["description", "components", "return_1d", "return_5d", "return_20d", "relative_5d", "dollar_volume_m"],
             color_continuous_scale=["#f85149", "#d29922", "#2ea043"],
             range_color=[0, 100],
-            title="Sector Money Flow Score",
+            title="Thematic Money Flow Score",
         )
         fig.update_layout(template="plotly_dark", paper_bgcolor="#0b0f14", plot_bgcolor="#0b0f14", height=430)
+        fig.update_xaxes(tickangle=-35)
         fig.update_yaxes(range=[0, 100], title="Flow Score")
         st.plotly_chart(fig, use_container_width=True)
 
@@ -130,16 +131,32 @@ def main() -> None:
         )
         st.plotly_chart(radar, use_container_width=True)
 
-    st.subheader("Sector Table")
-    display_df = sector_df.copy()
+    st.subheader("Theme Table")
+    display_df = theme_df.copy()
     for column in ["return_1d", "return_5d", "return_20d", "relative_5d", "dollar_volume_trend"]:
         display_df[column] = display_df[column].map(fmt_pct)
     display_df["flow_score"] = display_df["flow_score"].map(lambda x: f"{x:.1f}")
     display_df["dollar_volume_m"] = display_df["dollar_volume_m"].map(lambda x: f"${x:,.0f}M")
     st.dataframe(display_df, use_container_width=True, hide_index=True)
 
-    lower_left, lower_right = st.columns(2)
-    with lower_left:
+    tab1, tab2, tab3 = st.tabs(["Components", "Sector ETFs", "Benchmarks"])
+    with tab1:
+        component_display = component_df.copy()
+        for column in ["return_1d", "return_5d", "return_20d", "relative_5d", "dollar_volume_trend"]:
+            component_display[column] = component_display[column].map(fmt_pct)
+        component_display["flow_score"] = component_display["flow_score"].map(lambda x: f"{x:.1f}")
+        component_display["dollar_volume_m"] = component_display["dollar_volume_m"].map(lambda x: f"${x:,.0f}M")
+        st.dataframe(component_display, use_container_width=True, hide_index=True)
+
+    with tab2:
+        sector_display = sector_df.copy()
+        for column in ["return_1d", "return_5d", "return_20d", "relative_5d", "dollar_volume_trend"]:
+            sector_display[column] = sector_display[column].map(fmt_pct)
+        sector_display["flow_score"] = sector_display["flow_score"].map(lambda x: f"{x:.1f}")
+        sector_display["dollar_volume_m"] = sector_display["dollar_volume_m"].map(lambda x: f"${x:,.0f}M")
+        st.dataframe(sector_display, use_container_width=True, hide_index=True)
+
+    with tab3:
         st.subheader("Benchmark Pulse")
         if not bench_df.empty:
             bench_display = bench_df.copy()
@@ -147,13 +164,12 @@ def main() -> None:
                 bench_display[column] = bench_display[column].map(fmt_pct)
             st.dataframe(bench_display, use_container_width=True, hide_index=True)
 
-    with lower_right:
-        st.subheader("Alerts")
-        if alerts:
-            for alert in alerts:
-                st.warning(f"{alert.title}: {alert.message}")
-        else:
-            st.success("No active flow alerts.")
+    st.subheader("Alerts")
+    if alerts:
+        for alert in alerts:
+            st.warning(f"{alert.title}: {alert.message}")
+    else:
+        st.success("No active flow alerts.")
 
     if history:
         hist_df = pd.DataFrame(history)
@@ -164,7 +180,7 @@ def main() -> None:
             hist_fig.update_yaxes(range=[0, 100])
             st.plotly_chart(hist_fig, use_container_width=True)
 
-    st.caption("Research tool only. Sector flow scores are proxies derived from price and volume, not official fund-flow data.")
+    st.caption("Research tool only. Theme flow scores are proxies derived from price and volume, not official fund-flow data.")
 
 
 if __name__ == "__main__":

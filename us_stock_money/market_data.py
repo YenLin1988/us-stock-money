@@ -1,16 +1,17 @@
-"""Yahoo Finance data collection and sector-flow feature generation."""
+"""Yahoo Finance data collection and money-flow feature generation."""
 
 from __future__ import annotations
 
 import pandas as pd
 import yfinance as yf
 
-from .model_config import BENCHMARKS, SECTOR_ETFS
+from .model_config import BENCHMARKS, SECTOR_ETFS, THEME_BASKETS
 from .scoring import score_sector_flow
 
 
 def download_prices(period: str = "6mo", interval: str = "1d") -> pd.DataFrame:
-    tickers = list(SECTOR_ETFS) + list(BENCHMARKS)
+    theme_tickers = {ticker for basket in THEME_BASKETS.values() for ticker in basket["tickers"]}
+    tickers = sorted(set(SECTOR_ETFS) | set(BENCHMARKS) | theme_tickers)
     data = yf.download(
         tickers,
         period=period,
@@ -31,11 +32,106 @@ def _field(data: pd.DataFrame, field: str) -> pd.DataFrame:
     return data[[field]].dropna(how="all")
 
 
+def build_theme_table(data: pd.DataFrame) -> pd.DataFrame:
+    close = _field(data, "Close")
+    component_df = build_component_table(data)
+    rows = []
+    for theme, config in THEME_BASKETS.items():
+        tickers = [ticker for ticker in config["tickers"] if ticker in set(component_df["ticker"])]
+        if not tickers:
+            continue
+        members = component_df[component_df["ticker"].isin(tickers)].copy()
+        proxy = _best_proxy(close, tickers)
+        rows.append(
+            {
+                "theme": theme,
+                "description": config["description"],
+                "proxy": proxy,
+                "components": ", ".join(tickers),
+                "component_count": len(tickers),
+                "flow_score": float(members["flow_score"].mean()),
+                "return_1d": float(members["return_1d"].mean()),
+                "return_5d": float(members["return_5d"].mean()),
+                "return_20d": float(members["return_20d"].mean()),
+                "relative_5d": float(members["relative_5d"].mean()),
+                "dollar_volume_m": float(members["dollar_volume_m"].sum()),
+                "dollar_volume_trend": float(members["dollar_volume_trend"].mean()),
+                "volume_zscore": float(members["volume_zscore"].mean()),
+                "top_component": str(members.sort_values("flow_score", ascending=False).iloc[0]["ticker"]),
+                "weak_component": str(members.sort_values("flow_score", ascending=True).iloc[0]["ticker"]),
+            }
+        )
+    if not rows:
+        raise RuntimeError("No theme rows could be computed from market data")
+    return pd.DataFrame(rows).sort_values("flow_score", ascending=False)
+
+
+def build_component_table(data: pd.DataFrame) -> pd.DataFrame:
+    close = _field(data, "Close")
+    volume = _field(data, "Volume")
+    dollar_volume = close * volume
+
+    rows = []
+    theme_tickers = sorted({ticker for basket in THEME_BASKETS.values() for ticker in basket["tickers"]})
+    for ticker in theme_tickers:
+        if ticker not in close or ticker not in volume:
+            continue
+        prices = close[ticker].dropna()
+        vols = volume[ticker].dropna()
+        if len(prices) < 25 or len(vols) < 25:
+            continue
+
+        returns = _returns(prices)
+        ret_1d = _pct_change(prices, 1)
+        ret_5d = _pct_change(prices, 5)
+        ret_20d = _pct_change(prices, 20)
+        spy_5d = _pct_change(close["SPY"].dropna(), 5) if "SPY" in close else 0.0
+        relative_5d = ret_5d - spy_5d
+
+        dv = dollar_volume[ticker].dropna()
+        recent_dv = float(dv.tail(5).mean())
+        base_dv = float(dv.tail(60).mean()) if len(dv) >= 60 else float(dv.mean())
+        dollar_volume_trend = ((recent_dv / base_dv) - 1) * 100 if base_dv else 0.0
+
+        recent_vol = float(vols.iloc[-1])
+        vol_mean = float(vols.tail(60).mean()) if len(vols) >= 60 else float(vols.mean())
+        vol_std = float(vols.tail(60).std()) if len(vols) >= 60 else float(vols.std())
+        volume_zscore = (recent_vol - vol_mean) / vol_std if vol_std else 0.0
+
+        metrics = {
+            "return_1d": ret_1d,
+            "return_5d": ret_5d,
+            "return_20d": ret_20d,
+            "relative_5d": relative_5d,
+            "dollar_volume_trend": dollar_volume_trend,
+            "volume_zscore": volume_zscore,
+        }
+        rows.append(
+            {
+                "ticker": ticker,
+                "themes": ", ".join(_themes_for_ticker(ticker)),
+                "last_price": float(prices.iloc[-1]),
+                "return_1d": ret_1d,
+                "return_5d": ret_5d,
+                "return_20d": ret_20d,
+                "relative_5d": relative_5d,
+                "dollar_volume_m": recent_dv / 1_000_000,
+                "dollar_volume_trend": dollar_volume_trend,
+                "volume_zscore": volume_zscore,
+                "flow_score": score_sector_flow(metrics),
+                "daily_volatility": float(returns.tail(20).std() * 100),
+            }
+        )
+
+    if not rows:
+        raise RuntimeError("No component rows could be computed from market data")
+    return pd.DataFrame(rows).sort_values("flow_score", ascending=False)
+
+
 def build_sector_table(data: pd.DataFrame) -> pd.DataFrame:
     close = _field(data, "Close")
     volume = _field(data, "Volume")
     dollar_volume = close * volume
-    spy_returns = _returns(close["SPY"]) if "SPY" in close else pd.Series(dtype=float)
 
     rows = []
     for ticker, sector in SECTOR_ETFS.items():
@@ -123,3 +219,15 @@ def _pct_change(series: pd.Series, periods: int) -> float:
 
 def _returns(series: pd.Series) -> pd.Series:
     return series.pct_change().dropna()
+
+
+def _themes_for_ticker(ticker: str) -> list[str]:
+    return [theme for theme, config in THEME_BASKETS.items() if ticker in config["tickers"]]
+
+
+def _best_proxy(close: pd.DataFrame, tickers: list[str]) -> str:
+    available = [ticker for ticker in tickers if ticker in close]
+    if not available:
+        return ""
+    lengths = {ticker: len(close[ticker].dropna()) for ticker in available}
+    return max(lengths, key=lengths.get)

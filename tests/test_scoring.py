@@ -8,6 +8,7 @@ from us_stock_money.scoring import (
     group_scores,
     normalize,
     score_sector_flow,
+    theme_group_scores,
 )
 
 
@@ -41,6 +42,17 @@ class ScoringTests(unittest.TestCase):
         groups = group_scores(sector_scores)
         self.assertGreater(groups["Risk-On"], groups["Defensive"])
         self.assertEqual(broad_flow_score({"A": 25, "B": 75}), 50)
+
+    def test_theme_group_scores(self):
+        theme_scores = {
+            "Memory / HBM": 80,
+            "Optical Communication": 70,
+            "CPU / Advanced Packaging": 65,
+            "AI Infrastructure": 75,
+            "Medical / Devices": 45,
+        }
+        groups = theme_group_scores(theme_scores)
+        self.assertGreater(groups["AI Compute Chain"], groups["Healthcare / Automation"])
 
     def test_regime_classification(self):
         self.assertEqual(classify_regime(60, 70, 50).name, "Risk-On Accumulation")
