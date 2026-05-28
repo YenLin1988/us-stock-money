@@ -10,6 +10,7 @@ import streamlit as st
 
 from us_stock_money.alerts import evaluate_alerts
 from us_stock_money.market_data import benchmark_table, build_component_table, build_sector_table, build_theme_table, download_prices
+from us_stock_money.model_config import WATCHLIST_TICKERS
 from us_stock_money.scoring import broad_flow_score, build_top_recommendations, classify_regime, flow_delta, theme_group_scores
 from us_stock_money.storage import HistoryStore
 
@@ -44,9 +45,31 @@ def fmt_pct(value: float) -> str:
     return f"{value:+.2f}%"
 
 
+def format_component_table(frame: pd.DataFrame) -> pd.DataFrame:
+    display = frame.copy()
+    for column in ["return_1d", "return_5d", "return_20d", "relative_5d", "dollar_volume_trend"]:
+        display[column] = display[column].map(fmt_pct)
+    display["flow_score"] = display["flow_score"].map(lambda x: f"{x:.1f}")
+    display["dollar_volume_m"] = display["dollar_volume_m"].map(lambda x: f"${x:,.0f}M")
+    return display
+
+
+def watchlist_theme_labels(theme_df: pd.DataFrame) -> pd.DataFrame:
+    watchlist = set(WATCHLIST_TICKERS)
+    display = theme_df.copy()
+    display["selected_watchlist"] = display["components"].map(
+        lambda value: ", ".join([ticker for ticker in str(value).split(", ") if ticker in watchlist])
+    )
+    return display
+
+
 def main() -> None:
     st.title("US STOCK MONEY")
     st.caption("US thematic money-flow radar: AI compute chain, power, defense, space, rare earths, nuclear, medical, and other rotation themes.")
+
+    if st.button("Refresh market data", type="secondary"):
+        st.cache_data.clear()
+        st.rerun()
 
     try:
         theme_df, component_df, sector_df, bench_df = load_data()
@@ -138,6 +161,38 @@ def main() -> None:
             hide_index=True,
         )
 
+    st.subheader("Selected Watchlist Components")
+    st.caption("Your added stock universe is shown here directly, independent of flow ranking position.")
+    watchlist_df = component_df[component_df["ticker"].isin(WATCHLIST_TICKERS)].copy()
+    watchlist_found = set(watchlist_df["ticker"])
+    watch_cols = st.columns(3)
+    watch_cols[0].metric("Selected Tickers", len(WATCHLIST_TICKERS))
+    watch_cols[1].metric("Loaded From Yahoo", len(watchlist_found))
+    watch_cols[2].metric("Missing", len(set(WATCHLIST_TICKERS) - watchlist_found))
+    missing_watchlist = sorted(set(WATCHLIST_TICKERS) - watchlist_found)
+    if missing_watchlist:
+        st.warning(f"Missing market data: {', '.join(missing_watchlist)}")
+    if not watchlist_df.empty:
+        watchlist_display = format_component_table(watchlist_df)
+        st.dataframe(
+            watchlist_display[
+                [
+                    "ticker",
+                    "themes",
+                    "last_price",
+                    "flow_score",
+                    "return_5d",
+                    "return_20d",
+                    "relative_5d",
+                    "dollar_volume_m",
+                    "dollar_volume_trend",
+                    "volume_zscore",
+                ]
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
     left, right = st.columns([1.4, 1])
     with left:
         fig = px.bar(
@@ -176,7 +231,7 @@ def main() -> None:
         st.plotly_chart(radar, use_container_width=True)
 
     st.subheader("Theme Table")
-    display_df = theme_df.copy()
+    display_df = watchlist_theme_labels(theme_df)
     for column in ["return_1d", "return_5d", "return_20d", "relative_5d", "dollar_volume_trend"]:
         display_df[column] = display_df[column].map(fmt_pct)
     display_df["flow_score"] = display_df["flow_score"].map(lambda x: f"{x:.1f}")
@@ -185,11 +240,9 @@ def main() -> None:
 
     tab1, tab2, tab3 = st.tabs(["Components", "Sector ETFs", "Benchmarks"])
     with tab1:
-        component_display = component_df.copy()
-        for column in ["return_1d", "return_5d", "return_20d", "relative_5d", "dollar_volume_trend"]:
-            component_display[column] = component_display[column].map(fmt_pct)
-        component_display["flow_score"] = component_display["flow_score"].map(lambda x: f"{x:.1f}")
-        component_display["dollar_volume_m"] = component_display["dollar_volume_m"].map(lambda x: f"${x:,.0f}M")
+        show_watchlist_only = st.checkbox("Show selected watchlist only", value=True)
+        component_source = component_df[component_df["ticker"].isin(WATCHLIST_TICKERS)] if show_watchlist_only else component_df
+        component_display = format_component_table(component_source)
         st.dataframe(component_display, use_container_width=True, hide_index=True)
 
     with tab2:

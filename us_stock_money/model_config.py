@@ -75,6 +75,14 @@ THEME_BASKETS = {
     },
 }
 
+WATCHLIST_TICKERS = [
+    "BE", "GEV", "VRT", "RMBS", "PENG", "ONTO", "NOW", "NOK", "MRVL",
+    "KULR", "KOPN", "IREN", "IRDM", "INTC", "FIG", "AVGO", "ASX", "AMD",
+    "AMAT", "ALAB", "ALMU", "APP", "CRWD", "CRWV", "EOSE", "ETN", "GLW",
+    "PL", "RDW", "RKLB", "SNDK", "SIDU", "VST", "AXTI", "NBIS", "OSS",
+    "MP", "UUUU", "TSLA", "TSM", "AVAV", "RCAT", "RTX",
+]
+
 THEME_GROUPS = {
     "AI Compute Chain": {"Memory / HBM", "Optical Communication", "CPU / Advanced Packaging", "AI Infrastructure"},
     "Energy / Materials": {"Electric Power / Grid", "Rare Earth / Strategic Metals", "Nuclear Energy"},
