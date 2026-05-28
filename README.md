@@ -78,6 +78,16 @@ The dashboard ranks five component stocks or ETFs by combining:
 
 These candidates are research signals only. They are not buy/sell instructions.
 
+## Market Timing Signal
+
+Before showing candidate stocks, the dashboard checks whether broad-market conditions are suitable for new entries:
+
+- **Stand Aside**: SPY, QQQ, and IWM are mostly falling across 1D/5D/20D windows and broad/risk-on flow is weak. The dashboard warns to wait instead of entering immediately.
+- **Recovery Confirmed**: major benchmarks regain short-term strength while broad/risk-on flow improves. The dashboard flags that the market has stabilized enough to start evaluating entries.
+- **Wait for Confirmation**: conditions are mixed and the dashboard waits for clearer confirmation.
+
+This signal is a market-regime filter, not personal financial advice.
+
 ## Regimes
 
 | Regime | Condition | Meaning |

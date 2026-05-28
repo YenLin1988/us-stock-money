@@ -22,6 +22,18 @@ class AlertTests(unittest.TestCase):
     def test_no_alerts_for_neutral_context(self):
         self.assertEqual(evaluate_alerts({"broad_flow_score": 52, "regime": "Mixed Rotation"}), [])
 
+    def test_market_timing_alerts(self):
+        alerts = evaluate_alerts(
+            {
+                "broad_flow_score": 50,
+                "regime": "Mixed Rotation",
+                "market_timing_status": "stand_aside",
+                "market_timing_title": "大盤短線連續走弱，暫時不要進場",
+                "market_timing_message": "Wait for recovery.",
+            }
+        )
+        self.assertIn("market-stand-aside", {alert.key for alert in alerts})
+
 
 if __name__ == "__main__":
     unittest.main()

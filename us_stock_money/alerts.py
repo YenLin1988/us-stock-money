@@ -28,6 +28,9 @@ def evaluate_alerts(context: dict[str, Any]) -> list[Alert]:
     defensive = _num(context.get("defensive_score"))
     delta_24h = _num(context.get("delta_24h"))
     regime = str(context.get("regime", ""))
+    market_timing_status = str(context.get("market_timing_status", ""))
+    market_timing_title = str(context.get("market_timing_title", ""))
+    market_timing_message = str(context.get("market_timing_message", ""))
 
     if broad is not None and broad <= ALERT_THRESHOLDS["broad_distribution"]:
         alerts.append(Alert("broad-distribution", "critical", "Broad equity distribution", f"Broad flow score is {broad:.1f}/100.", broad))
@@ -42,6 +45,11 @@ def evaluate_alerts(context: dict[str, Any]) -> list[Alert]:
 
     if delta_24h is not None and delta_24h <= -8:
         alerts.append(Alert("flow-velocity-down", "warning", "Money flow deteriorated over 24H", f"24H flow delta is {delta_24h:+.1f}.", delta_24h))
+
+    if market_timing_status == "stand_aside":
+        alerts.append(Alert("market-stand-aside", "critical", market_timing_title, market_timing_message))
+    elif market_timing_status == "recovery_confirmed":
+        alerts.append(Alert("market-recovery-confirmed", "info", market_timing_title, market_timing_message))
 
     return alerts
 

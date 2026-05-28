@@ -17,6 +17,16 @@ class FlowRegime:
     icon: str
 
 
+@dataclass(frozen=True)
+class MarketTimingSignal:
+    status: str
+    severity: str
+    title: str
+    message: str
+    score: float
+    evidence: list[str]
+
+
 def normalize(value: float, low: float, high: float) -> float:
     """Linearly map a value onto a clamped 0-100 score."""
     if high == low:
@@ -137,6 +147,64 @@ def classify_regime(broad_score: float, risk_on_score: float, defensive_score: f
     if broad_score < 45 and defensive_score < 55:
         return FlowRegime("Broad Distribution", "#F85149", "distribution", "-")
     return FlowRegime("Mixed Rotation", "#58A6FF", "mixed", "=")
+
+
+def market_timing_signal(benchmark_rows, broad_score: float, risk_on_score: float) -> MarketTimingSignal:
+    """Evaluate whether broad-market weakness argues for waiting or re-entry."""
+    benchmarks = {str(row.get("ticker")): row for row in _iter_records(benchmark_rows)}
+    core = [ticker for ticker in ["SPY", "QQQ", "IWM"] if ticker in benchmarks]
+
+    weak_count = 0
+    recovery_count = 0
+    evidence: list[str] = []
+
+    for ticker in core:
+        row = benchmarks[ticker]
+        ret_1d = float(row.get("return_1d", 0.0))
+        ret_5d = float(row.get("return_5d", 0.0))
+        ret_20d = float(row.get("return_20d", 0.0))
+        if ret_1d < -0.5 and ret_5d < -2.0 and ret_20d < -3.0:
+            weak_count += 1
+            evidence.append(f"{ticker} is still falling: 1D {ret_1d:+.1f}%, 5D {ret_5d:+.1f}%, 20D {ret_20d:+.1f}%")
+        if ret_1d > 0.0 and ret_5d > 1.0 and ret_20d > -3.0:
+            recovery_count += 1
+            evidence.append(f"{ticker} is stabilizing: 1D {ret_1d:+.1f}%, 5D {ret_5d:+.1f}%, 20D {ret_20d:+.1f}%")
+
+    broad_weak = broad_score < 45 or risk_on_score < 45
+    broad_recovering = broad_score >= 50 and risk_on_score >= 50
+    if broad_weak:
+        evidence.append(f"Broad/risk-on flow is weak: broad {broad_score:.1f}, AI compute {risk_on_score:.1f}")
+    if broad_recovering:
+        evidence.append(f"Flow backdrop is recovering: broad {broad_score:.1f}, AI compute {risk_on_score:.1f}")
+
+    if weak_count >= 2 and broad_weak:
+        return MarketTimingSignal(
+            status="stand_aside",
+            severity="critical",
+            title="大盤短線連續走弱，暫時不要進場",
+            message="SPY/QQQ/IWM 多數仍在短線下跌，且資金流尚未修復。優先等待回穩訊號。",
+            score=25.0,
+            evidence=evidence[:5],
+        )
+
+    if recovery_count >= 2 and broad_recovering:
+        return MarketTimingSignal(
+            status="recovery_confirmed",
+            severity="info",
+            title="市場已出現回穩訊號，可以開始評估進場",
+            message="主要指數短線轉強，且 broad/risk-on flow 回到可接受區間。可分批觀察強勢主題。",
+            score=75.0,
+            evidence=evidence[:5],
+        )
+
+    return MarketTimingSignal(
+        status="wait_for_confirmation",
+        severity="warning",
+        title="大盤尚未給出明確進場訊號",
+        message="短線下跌或回穩條件尚未同時確認。等待 SPY/QQQ/IWM 與資金流同步改善。",
+        score=50.0,
+        evidence=evidence[:5] or ["Benchmark data is mixed; no clean timing signal."],
+    )
 
 
 def flow_delta(history: list[dict[str, object]], current_score: float, hours_back: int, now: dt.datetime) -> float | None:

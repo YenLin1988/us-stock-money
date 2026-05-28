@@ -11,7 +11,7 @@ import streamlit as st
 from us_stock_money.alerts import evaluate_alerts
 from us_stock_money.market_data import benchmark_table, build_component_table, build_sector_table, build_theme_table, download_prices
 from us_stock_money.model_config import MARKET_DATA_VERSION, WATCHLIST_TICKERS
-from us_stock_money.scoring import broad_flow_score, build_top_recommendations, classify_regime, flow_delta, theme_group_scores
+from us_stock_money.scoring import broad_flow_score, build_top_recommendations, classify_regime, flow_delta, market_timing_signal, theme_group_scores
 from us_stock_money.storage import HistoryStore
 
 
@@ -98,6 +98,7 @@ def main() -> None:
     store.upsert_record(record)
     history = store.load_history()
     delta_24h = flow_delta(history, broad, 24, now)
+    timing_signal = market_timing_signal(bench_df, broad, risk_on)
 
     alerts = evaluate_alerts(
         {
@@ -106,6 +107,9 @@ def main() -> None:
             "defensive_score": defensive,
             "delta_24h": delta_24h,
             "regime": regime.name,
+            "market_timing_status": timing_signal.status,
+            "market_timing_title": timing_signal.title,
+            "market_timing_message": timing_signal.message,
         }
     )
     recommendations = build_top_recommendations(component_df, theme_scores, limit=5)
@@ -117,6 +121,18 @@ def main() -> None:
     col4.metric("Healthcare / Automation", f"{defensive:.1f}/100")
 
     st.divider()
+
+    st.subheader("Market Timing Signal")
+    if timing_signal.status == "stand_aside":
+        st.error(f"**{timing_signal.title}** - {timing_signal.message}")
+    elif timing_signal.status == "recovery_confirmed":
+        st.success(f"**{timing_signal.title}** - {timing_signal.message}")
+    else:
+        st.warning(f"**{timing_signal.title}** - {timing_signal.message}")
+    with st.expander("Timing signal evidence", expanded=False):
+        st.metric("Timing Score", f"{timing_signal.score:.0f}/100")
+        for item in timing_signal.evidence:
+            st.caption(item)
 
     st.subheader("Top 5 Flow Candidates")
     st.caption("Ranked by component money-flow score plus related theme strength. Research signal only, not financial advice.")

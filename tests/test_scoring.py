@@ -7,6 +7,7 @@ from us_stock_money.scoring import (
     classify_regime,
     flow_delta,
     group_scores,
+    market_timing_signal,
     normalize,
     score_sector_flow,
     theme_group_scores,
@@ -96,6 +97,26 @@ class ScoringTests(unittest.TestCase):
             {"time": "2026-05-27 12:00", "broad_flow_score": 60},
         ]
         self.assertEqual(flow_delta(history, 60, 24, now), 10)
+
+    def test_market_timing_warns_when_broad_market_keeps_falling(self):
+        rows = [
+            {"ticker": "SPY", "return_1d": -1.2, "return_5d": -3.5, "return_20d": -6.0},
+            {"ticker": "QQQ", "return_1d": -1.5, "return_5d": -4.0, "return_20d": -8.0},
+            {"ticker": "IWM", "return_1d": 0.2, "return_5d": -1.0, "return_20d": -2.0},
+        ]
+        signal = market_timing_signal(rows, broad_score=40, risk_on_score=38)
+        self.assertEqual(signal.status, "stand_aside")
+        self.assertIn("暫時不要進場", signal.title)
+
+    def test_market_timing_confirms_recovery(self):
+        rows = [
+            {"ticker": "SPY", "return_1d": 0.8, "return_5d": 2.1, "return_20d": -1.0},
+            {"ticker": "QQQ", "return_1d": 1.0, "return_5d": 3.0, "return_20d": 2.0},
+            {"ticker": "IWM", "return_1d": -0.1, "return_5d": 0.5, "return_20d": -2.0},
+        ]
+        signal = market_timing_signal(rows, broad_score=55, risk_on_score=58)
+        self.assertEqual(signal.status, "recovery_confirmed")
+        self.assertIn("可以開始評估進場", signal.title)
 
 
 if __name__ == "__main__":
