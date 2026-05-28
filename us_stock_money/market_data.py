@@ -5,13 +5,33 @@ from __future__ import annotations
 import pandas as pd
 import yfinance as yf
 
-from .model_config import BENCHMARKS, SECTOR_ETFS, THEME_BASKETS
+from .model_config import ALL_TICKERS, BENCHMARKS, SECTOR_ETFS, THEME_BASKETS
 from .scoring import score_sector_flow
 
 
-def download_prices(period: str = "6mo", interval: str = "1d") -> pd.DataFrame:
-    theme_tickers = {ticker for basket in THEME_BASKETS.values() for ticker in basket["tickers"]}
-    tickers = sorted(set(SECTOR_ETFS) | set(BENCHMARKS) | theme_tickers)
+def download_prices(period: str = "6mo", interval: str = "1d", tickers: list[str] | None = None) -> pd.DataFrame:
+    tickers = sorted(set(tickers or ALL_TICKERS))
+    data = _download_in_chunks(tickers, period=period, interval=interval)
+    missing = sorted(set(tickers) - _available_tickers(data))
+    if missing:
+        repairs = [_download_yahoo([ticker], period=period, interval=interval) for ticker in missing]
+        data = _merge_frames([data, *repairs])
+    if data.empty:
+        raise RuntimeError("Yahoo Finance returned no data")
+    return data
+
+
+def _download_in_chunks(tickers: list[str], period: str, interval: str, chunk_size: int = 35) -> pd.DataFrame:
+    frames = []
+    for start in range(0, len(tickers), chunk_size):
+        chunk = tickers[start:start + chunk_size]
+        frames.append(_download_yahoo(chunk, period=period, interval=interval))
+    return _merge_frames(frames)
+
+
+def _download_yahoo(tickers: list[str], period: str, interval: str) -> pd.DataFrame:
+    if not tickers:
+        return pd.DataFrame()
     data = yf.download(
         tickers,
         period=period,
@@ -19,11 +39,40 @@ def download_prices(period: str = "6mo", interval: str = "1d") -> pd.DataFrame:
         auto_adjust=True,
         group_by="column",
         progress=False,
-        threads=True,
+        threads=len(tickers) > 1,
     )
-    if data.empty:
-        raise RuntimeError("Yahoo Finance returned no data")
+    return _ensure_multiindex(data, tickers[0] if len(tickers) == 1 else None)
+
+
+def _merge_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    usable = [frame for frame in frames if frame is not None and not frame.empty]
+    if not usable:
+        return pd.DataFrame()
+    data = pd.concat(usable, axis=1)
+    data = data.loc[:, ~data.columns.duplicated()]
+    return data.dropna(how="all")
+
+
+def _ensure_multiindex(data: pd.DataFrame, ticker: str | None) -> pd.DataFrame:
+    if data.empty or ticker is None or isinstance(data.columns, pd.MultiIndex):
+        return data
+    data = data.copy()
+    data.columns = pd.MultiIndex.from_product([data.columns, [ticker]])
     return data
+
+
+def _available_tickers(data: pd.DataFrame) -> set[str]:
+    if data.empty:
+        return set()
+    try:
+        close = _field(data, "Close")
+        volume = _field(data, "Volume")
+    except (KeyError, TypeError):
+        return set()
+    return {
+        ticker for ticker in close.columns
+        if ticker in volume.columns and len(close[ticker].dropna()) >= 25 and len(volume[ticker].dropna()) >= 25
+    }
 
 
 def _field(data: pd.DataFrame, field: str) -> pd.DataFrame:

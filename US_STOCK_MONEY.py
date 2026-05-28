@@ -10,7 +10,7 @@ import streamlit as st
 
 from us_stock_money.alerts import evaluate_alerts
 from us_stock_money.market_data import benchmark_table, build_component_table, build_sector_table, build_theme_table, download_prices
-from us_stock_money.model_config import WATCHLIST_TICKERS
+from us_stock_money.model_config import MARKET_DATA_VERSION, WATCHLIST_TICKERS
 from us_stock_money.scoring import broad_flow_score, build_top_recommendations, classify_regime, flow_delta, theme_group_scores
 from us_stock_money.storage import HistoryStore
 
@@ -36,7 +36,7 @@ st.markdown(
 
 
 @st.cache_data(ttl=900)
-def load_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def load_data(market_data_version: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     data = download_prices()
     return build_theme_table(data), build_component_table(data), build_sector_table(data), benchmark_table(data)
 
@@ -72,7 +72,7 @@ def main() -> None:
         st.rerun()
 
     try:
-        theme_df, component_df, sector_df, bench_df = load_data()
+        theme_df, component_df, sector_df, bench_df = load_data(MARKET_DATA_VERSION)
     except Exception as exc:  # pragma: no cover - Streamlit runtime display
         st.error(f"Could not load market data: {exc}")
         return

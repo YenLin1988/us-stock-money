@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 SECTOR_ETFS = {
     "XLK": "Technology",
     "XLC": "Communication Services",
@@ -98,6 +100,13 @@ BENCHMARKS = {
     "IWF": "Growth",
     "IWD": "Value",
 }
+
+ALL_TICKERS = sorted(
+    set(SECTOR_ETFS)
+    | set(BENCHMARKS)
+    | {ticker for basket in THEME_BASKETS.values() for ticker in basket["tickers"]}
+)
+MARKET_DATA_VERSION = hashlib.sha1(",".join(ALL_TICKERS).encode("utf-8")).hexdigest()[:12]
 
 RISK_ON = {"XLK", "XLC", "XLY", "XLF", "XLI"}
 DEFENSIVE = {"XLP", "XLV", "XLU"}

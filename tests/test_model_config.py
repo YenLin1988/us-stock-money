@@ -1,6 +1,6 @@
 import unittest
 
-from us_stock_money.model_config import THEME_BASKETS, WATCHLIST_TICKERS
+from us_stock_money.model_config import ALL_TICKERS, MARKET_DATA_VERSION, THEME_BASKETS, WATCHLIST_TICKERS
 
 
 class ModelConfigTests(unittest.TestCase):
@@ -9,6 +9,8 @@ class ModelConfigTests(unittest.TestCase):
         universe = {ticker for basket in THEME_BASKETS.values() for ticker in basket["tickers"]}
         self.assertLessEqual(requested, universe)
         self.assertIn("NOK", requested)
+        self.assertLessEqual(requested, set(ALL_TICKERS))
+        self.assertTrue(MARKET_DATA_VERSION)
 
 
 if __name__ == "__main__":
