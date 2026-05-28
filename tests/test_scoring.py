@@ -7,6 +7,7 @@ from us_stock_money.scoring import (
     classify_regime,
     flow_delta,
     group_scores,
+    intraday_market_signal,
     market_timing_signal,
     normalize,
     score_sector_flow,
@@ -117,6 +118,26 @@ class ScoringTests(unittest.TestCase):
         signal = market_timing_signal(rows, broad_score=55, risk_on_score=58)
         self.assertEqual(signal.status, "recovery_confirmed")
         self.assertIn("可以開始評估進場", signal.title)
+
+    def test_intraday_market_signal_warns_on_5m_selloff(self):
+        rows = [
+            {"ticker": "SPY", "day_return": -1.1, "return_30m": -0.4, "return_60m": -0.8, "below_vwap": True},
+            {"ticker": "QQQ", "day_return": -1.4, "return_30m": -0.5, "return_60m": -1.0, "below_vwap": True},
+            {"ticker": "IWM", "day_return": -0.2, "return_30m": 0.1, "return_60m": -0.2, "below_vwap": False},
+        ]
+        signal = intraday_market_signal(rows)
+        self.assertEqual(signal.status, "intraday_stand_aside")
+        self.assertIn("暫時不要進場", signal.title)
+
+    def test_intraday_market_signal_confirms_5m_recovery(self):
+        rows = [
+            {"ticker": "SPY", "day_return": 0.1, "return_30m": 0.3, "return_60m": 0.2, "below_vwap": False},
+            {"ticker": "QQQ", "day_return": -0.1, "return_30m": 0.4, "return_60m": 0.1, "below_vwap": False},
+            {"ticker": "IWM", "day_return": -0.7, "return_30m": 0.0, "return_60m": -0.5, "below_vwap": True},
+        ]
+        signal = intraday_market_signal(rows)
+        self.assertEqual(signal.status, "intraday_recovery")
+        self.assertIn("回穩訊號", signal.title)
 
 
 if __name__ == "__main__":

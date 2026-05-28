@@ -9,9 +9,25 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from us_stock_money.alerts import evaluate_alerts
-from us_stock_money.market_data import benchmark_table, build_component_table, build_sector_table, build_theme_table, download_prices
+from us_stock_money.market_data import (
+    benchmark_table,
+    build_component_table,
+    build_intraday_market_table,
+    build_sector_table,
+    build_theme_table,
+    download_intraday_prices,
+    download_prices,
+)
 from us_stock_money.model_config import MARKET_DATA_VERSION, WATCHLIST_TICKERS
-from us_stock_money.scoring import broad_flow_score, build_top_recommendations, classify_regime, flow_delta, market_timing_signal, theme_group_scores
+from us_stock_money.scoring import (
+    broad_flow_score,
+    build_top_recommendations,
+    classify_regime,
+    flow_delta,
+    intraday_market_signal,
+    market_timing_signal,
+    theme_group_scores,
+)
 from us_stock_money.storage import HistoryStore
 
 
@@ -41,6 +57,12 @@ def load_data(market_data_version: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.
     return build_theme_table(data), build_component_table(data), build_sector_table(data), benchmark_table(data)
 
 
+@st.cache_data(ttl=300)
+def load_intraday_data(market_data_version: str) -> pd.DataFrame:
+    data = download_intraday_prices(period="5d", interval="5m")
+    return build_intraday_market_table(data)
+
+
 def fmt_pct(value: float) -> str:
     return f"{value:+.2f}%"
 
@@ -51,6 +73,16 @@ def format_component_table(frame: pd.DataFrame) -> pd.DataFrame:
         display[column] = display[column].map(fmt_pct)
     display["flow_score"] = display["flow_score"].map(lambda x: f"{x:.1f}")
     display["dollar_volume_m"] = display["dollar_volume_m"].map(lambda x: f"${x:,.0f}M")
+    return display
+
+
+def format_intraday_table(frame: pd.DataFrame) -> pd.DataFrame:
+    display = frame.copy()
+    for column in ["day_return", "return_30m", "return_60m", "volume_trend"]:
+        display[column] = display[column].map(fmt_pct)
+    for column in ["last_price", "session_open", "vwap"]:
+        display[column] = display[column].map(lambda x: f"{x:,.2f}")
+    display["below_vwap"] = display["below_vwap"].map(lambda x: "Yes" if x else "No")
     return display
 
 
@@ -76,6 +108,10 @@ def main() -> None:
     except Exception as exc:  # pragma: no cover - Streamlit runtime display
         st.error(f"Could not load market data: {exc}")
         return
+    try:
+        intraday_df = load_intraday_data(MARKET_DATA_VERSION)
+    except Exception:
+        intraday_df = pd.DataFrame()
 
     theme_scores = dict(zip(theme_df["theme"], theme_df["flow_score"], strict=False))
     groups = theme_group_scores(theme_scores)
@@ -99,6 +135,7 @@ def main() -> None:
     history = store.load_history()
     delta_24h = flow_delta(history, broad, 24, now)
     timing_signal = market_timing_signal(bench_df, broad, risk_on)
+    intraday_signal = intraday_market_signal(intraday_df)
 
     alerts = evaluate_alerts(
         {
@@ -110,6 +147,9 @@ def main() -> None:
             "market_timing_status": timing_signal.status,
             "market_timing_title": timing_signal.title,
             "market_timing_message": timing_signal.message,
+            "intraday_status": intraday_signal.status,
+            "intraday_title": intraday_signal.title,
+            "intraday_message": intraday_signal.message,
         }
     )
     recommendations = build_top_recommendations(component_df, theme_scores, limit=5)
@@ -132,6 +172,20 @@ def main() -> None:
     with st.expander("Timing signal evidence", expanded=False):
         st.metric("Timing Score", f"{timing_signal.score:.0f}/100")
         for item in timing_signal.evidence:
+            st.caption(item)
+
+    st.subheader("5m Intraday Market Monitor")
+    if intraday_signal.status == "intraday_stand_aside":
+        st.error(f"**{intraday_signal.title}** - {intraday_signal.message}")
+    elif intraday_signal.status == "intraday_recovery":
+        st.success(f"**{intraday_signal.title}** - {intraday_signal.message}")
+    else:
+        st.warning(f"**{intraday_signal.title}** - {intraday_signal.message}")
+    if not intraday_df.empty:
+        st.dataframe(format_intraday_table(intraday_df), use_container_width=True, hide_index=True)
+    with st.expander("5m intraday evidence", expanded=False):
+        st.metric("Intraday Timing Score", f"{intraday_signal.score:.0f}/100")
+        for item in intraday_signal.evidence:
             st.caption(item)
 
     st.subheader("Top 5 Flow Candidates")

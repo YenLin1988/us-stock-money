@@ -31,6 +31,9 @@ def evaluate_alerts(context: dict[str, Any]) -> list[Alert]:
     market_timing_status = str(context.get("market_timing_status", ""))
     market_timing_title = str(context.get("market_timing_title", ""))
     market_timing_message = str(context.get("market_timing_message", ""))
+    intraday_status = str(context.get("intraday_status", ""))
+    intraday_title = str(context.get("intraday_title", ""))
+    intraday_message = str(context.get("intraday_message", ""))
 
     if broad is not None and broad <= ALERT_THRESHOLDS["broad_distribution"]:
         alerts.append(Alert("broad-distribution", "critical", "Broad equity distribution", f"Broad flow score is {broad:.1f}/100.", broad))
@@ -50,6 +53,11 @@ def evaluate_alerts(context: dict[str, Any]) -> list[Alert]:
         alerts.append(Alert("market-stand-aside", "critical", market_timing_title, market_timing_message))
     elif market_timing_status == "recovery_confirmed":
         alerts.append(Alert("market-recovery-confirmed", "info", market_timing_title, market_timing_message))
+
+    if intraday_status == "intraday_stand_aside":
+        alerts.append(Alert("intraday-stand-aside", "critical", intraday_title, intraday_message))
+    elif intraday_status == "intraday_recovery":
+        alerts.append(Alert("intraday-recovery", "info", intraday_title, intraday_message))
 
     return alerts
 

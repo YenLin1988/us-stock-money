@@ -88,6 +88,16 @@ Before showing candidate stocks, the dashboard checks whether broad-market condi
 
 This signal is a market-regime filter, not personal financial advice.
 
+## 5m Intraday Market Monitor
+
+The dashboard also includes a free Yahoo Finance 5-minute intraday monitor for SPY, QQQ, and IWM:
+
+- **Intraday Stand Aside**: most major benchmarks are down on the day, still weakening over the last 30 minutes, and trading below VWAP.
+- **Intraday Recovery**: most major benchmarks stabilize above VWAP with positive short-term momentum.
+- **Intraday Wait**: conditions are mixed and need more confirmation.
+
+This monitor uses `period="5d"` and `interval="5m"` with a 5-minute Streamlit cache. Yahoo intraday data can be delayed, incomplete, or temporarily rate-limited.
+
 ## Regimes
 
 | Regime | Condition | Meaning |

@@ -101,6 +101,12 @@ BENCHMARKS = {
     "IWD": "Value",
 }
 
+INTRADAY_BENCHMARKS = {
+    "SPY": "S&P 500",
+    "QQQ": "Nasdaq 100",
+    "IWM": "Russell 2000",
+}
+
 ALL_TICKERS = sorted(
     set(SECTOR_ETFS)
     | set(BENCHMARKS)

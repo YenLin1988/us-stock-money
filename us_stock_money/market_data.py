@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import yfinance as yf
 
-from .model_config import ALL_TICKERS, BENCHMARKS, SECTOR_ETFS, THEME_BASKETS
+from .model_config import ALL_TICKERS, BENCHMARKS, INTRADAY_BENCHMARKS, SECTOR_ETFS, THEME_BASKETS
 from .scoring import score_sector_flow
 
 
@@ -19,6 +19,10 @@ def download_prices(period: str = "6mo", interval: str = "1d", tickers: list[str
     if data.empty:
         raise RuntimeError("Yahoo Finance returned no data")
     return data
+
+
+def download_intraday_prices(period: str = "5d", interval: str = "5m") -> pd.DataFrame:
+    return download_prices(period=period, interval=interval, tickers=list(INTRADAY_BENCHMARKS))
 
 
 def _download_in_chunks(tickers: list[str], period: str, interval: str, chunk_size: int = 35) -> pd.DataFrame:
@@ -260,6 +264,53 @@ def benchmark_table(data: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def build_intraday_market_table(data: pd.DataFrame) -> pd.DataFrame:
+    close = _field(data, "Close")
+    volume = _field(data, "Volume")
+    rows = []
+    for ticker, label in INTRADAY_BENCHMARKS.items():
+        if ticker not in close or ticker not in volume:
+            continue
+        prices = close[ticker].dropna()
+        vols = volume[ticker].reindex(prices.index).fillna(0)
+        if len(prices) < 12:
+            continue
+
+        latest_ts = prices.index[-1]
+        latest_session = _session_slice(prices, latest_ts)
+        latest_session_vol = vols.reindex(latest_session.index).fillna(0)
+        if len(latest_session) < 3:
+            continue
+
+        last_price = float(latest_session.iloc[-1])
+        open_price = float(latest_session.iloc[0])
+        day_return = (last_price / open_price - 1) * 100 if open_price else 0.0
+        return_30m = _pct_change(latest_session, 6)
+        return_60m = _pct_change(latest_session, 12)
+        vwap = _vwap(latest_session, latest_session_vol)
+        below_vwap = last_price < vwap if vwap else False
+        recent_volume = float(latest_session_vol.tail(6).mean())
+        base_volume = float(vols.tail(120).mean()) if len(vols) >= 120 else float(vols.mean())
+        volume_trend = ((recent_volume / base_volume) - 1) * 100 if base_volume else 0.0
+
+        rows.append(
+            {
+                "ticker": ticker,
+                "name": label,
+                "last_time": str(latest_ts),
+                "last_price": last_price,
+                "session_open": open_price,
+                "day_return": day_return,
+                "return_30m": return_30m,
+                "return_60m": return_60m,
+                "vwap": vwap,
+                "below_vwap": below_vwap,
+                "volume_trend": volume_trend,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _pct_change(series: pd.Series, periods: int) -> float:
     if len(series) <= periods:
         return 0.0
@@ -268,6 +319,21 @@ def _pct_change(series: pd.Series, periods: int) -> float:
 
 def _returns(series: pd.Series) -> pd.Series:
     return series.pct_change().dropna()
+
+
+def _session_slice(series: pd.Series, latest_ts) -> pd.Series:
+    try:
+        latest_date = latest_ts.date()
+        return series[[idx.date() == latest_date for idx in series.index]]
+    except AttributeError:
+        return series.tail(78)
+
+
+def _vwap(prices: pd.Series, volumes: pd.Series) -> float:
+    volume_sum = float(volumes.sum())
+    if not volume_sum:
+        return float(prices.iloc[-1])
+    return float((prices * volumes).sum() / volume_sum)
 
 
 def _themes_for_ticker(ticker: str) -> list[str]:

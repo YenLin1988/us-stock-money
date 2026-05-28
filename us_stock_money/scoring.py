@@ -27,6 +27,16 @@ class MarketTimingSignal:
     evidence: list[str]
 
 
+@dataclass(frozen=True)
+class IntradayMarketSignal:
+    status: str
+    severity: str
+    title: str
+    message: str
+    score: float
+    evidence: list[str]
+
+
 def normalize(value: float, low: float, high: float) -> float:
     """Linearly map a value onto a clamped 0-100 score."""
     if high == low:
@@ -204,6 +214,67 @@ def market_timing_signal(benchmark_rows, broad_score: float, risk_on_score: floa
         message="短線下跌或回穩條件尚未同時確認。等待 SPY/QQQ/IWM 與資金流同步改善。",
         score=50.0,
         evidence=evidence[:5] or ["Benchmark data is mixed; no clean timing signal."],
+    )
+
+
+def intraday_market_signal(intraday_rows) -> IntradayMarketSignal:
+    """Evaluate 5-minute broad-market pressure for same-day entry timing."""
+    rows = list(_iter_records(intraday_rows))
+    if not rows:
+        return IntradayMarketSignal(
+            status="intraday_unavailable",
+            severity="warning",
+            title="盤中 5m 資料暫時無法取得",
+            message="Yahoo Finance 盤中資料可能延遲或暫時漏抓，先以日線大盤訊號為主。",
+            score=0.0,
+            evidence=["No intraday rows were available."],
+        )
+
+    weak_count = 0
+    recovery_count = 0
+    evidence: list[str] = []
+
+    for row in rows:
+        ticker = str(row.get("ticker", ""))
+        day_return = float(row.get("day_return", 0.0))
+        return_30m = float(row.get("return_30m", 0.0))
+        return_60m = float(row.get("return_60m", 0.0))
+        below_vwap = bool(row.get("below_vwap", False))
+
+        if day_return <= -0.8 and return_30m <= -0.2 and below_vwap:
+            weak_count += 1
+            evidence.append(f"{ticker} intraday weak: day {day_return:+.2f}%, 30m {return_30m:+.2f}%, below VWAP")
+        if day_return >= -0.25 and return_30m > 0 and return_60m > -0.3 and not below_vwap:
+            recovery_count += 1
+            evidence.append(f"{ticker} stabilizing: day {day_return:+.2f}%, 30m {return_30m:+.2f}%, above VWAP")
+
+    if weak_count >= 2:
+        return IntradayMarketSignal(
+            status="intraday_stand_aside",
+            severity="critical",
+            title="盤中 5m 急跌風險，暫時不要進場",
+            message="SPY/QQQ/IWM 多數低於 VWAP 且短線仍走弱，等待盤中止跌或回到 VWAP 上方。",
+            score=20.0,
+            evidence=evidence[:5],
+        )
+
+    if recovery_count >= 2:
+        return IntradayMarketSignal(
+            status="intraday_recovery",
+            severity="info",
+            title="盤中 5m 回穩訊號出現，可以開始觀察進場",
+            message="主要指數盤中站回 VWAP 附近或上方，且短線動能轉正。可搭配日線訊號分批觀察。",
+            score=80.0,
+            evidence=evidence[:5],
+        )
+
+    return IntradayMarketSignal(
+        status="intraday_wait",
+        severity="warning",
+        title="盤中 5m 訊號尚未明確",
+        message="盤中賣壓與回穩條件都未充分確認，等待 SPY/QQQ/IWM 方向更清楚。",
+        score=50.0,
+        evidence=evidence[:5] or ["Intraday benchmark conditions are mixed."],
     )
 
 

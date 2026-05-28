@@ -34,6 +34,18 @@ class AlertTests(unittest.TestCase):
         )
         self.assertIn("market-stand-aside", {alert.key for alert in alerts})
 
+    def test_intraday_market_alerts(self):
+        alerts = evaluate_alerts(
+            {
+                "broad_flow_score": 50,
+                "regime": "Mixed Rotation",
+                "intraday_status": "intraday_stand_aside",
+                "intraday_title": "盤中 5m 急跌風險，暫時不要進場",
+                "intraday_message": "Wait for intraday recovery.",
+            }
+        )
+        self.assertIn("intraday-stand-aside", {alert.key for alert in alerts})
+
 
 if __name__ == "__main__":
     unittest.main()
