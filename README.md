@@ -10,17 +10,17 @@ The dashboard is built around thematic baskets instead of only classic sectors:
 
 | Theme | Example Proxies |
 |---|---|
-| Memory / HBM | MU, WDC, STX, RMBS, SIMO |
-| Optical Communication | COHR, LITE, CIEN, FN, AAOI |
-| Electric Power / Grid | CEG, VST, NEE, ETN, PWR, GEV, GNRC |
-| CPU / Advanced Packaging | AMD, INTC, ARM, TSM, AMKR, ASML, AMAT, KLAC |
-| Space | RKLB, ASTS, LUNR, IRDM, PL, VSAT |
+| Memory / HBM | MU, WDC, STX, RMBS, SIMO, SNDK |
+| Optical Communication | COHR, LITE, CIEN, FN, AAOI, NOK, MRVL, GLW, KOPN |
+| Electric Power / Grid | CEG, VST, NEE, ETN, PWR, GEV, GNRC, BE, EOSE, TSLA |
+| CPU / Advanced Packaging | AMD, INTC, ARM, TSM, AMKR, ASML, AMAT, KLAC, ONTO, ASX, ALAB |
+| Space | RKLB, ASTS, LUNR, IRDM, PL, VSAT, RDW, SIDU |
 | Drones / Autonomy | AVAV, KTOS, RCAT, ONDS, LMT, NOC |
 | Rare Earth / Strategic Metals | REMX, MP, UUUU, LAC, ALB, SCCO |
 | Nuclear Energy | NLR, URA, CCJ, CEG, BWXT, OKLO, SMR, LEU, VST |
 | Medical / Devices | XLV, IHI, ISRG, ABT, SYK, BSX, TMO, MDT |
-| AI Infrastructure | NVDA, AVGO, ANET, VRT, DELL, SMCI, ETN |
-| AI Software / Data | MSFT, PLTR, SNOW, MDB, NOW, ORCL |
+| AI Infrastructure | NVDA, AVGO, ANET, VRT, DELL, SMCI, ETN, PENG, CRWV, NBIS, IREN |
+| AI Software / Data | MSFT, PLTR, SNOW, MDB, NOW, ORCL, APP, FIG |
 | Cybersecurity | PANW, CRWD, ZS, NET, FTNT, S |
 | Robotics / Automation | BOTZ, ISRG, TER, ROK, SYM, HON |
 | Defense / Aerospace | ITA, LMT, RTX, NOC, GD, HWM |

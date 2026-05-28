@@ -19,23 +19,23 @@ SECTOR_ETFS = {
 THEME_BASKETS = {
     "Memory / HBM": {
         "description": "DRAM, NAND, storage, and high-bandwidth memory proxies",
-        "tickers": ["MU", "WDC", "STX", "RMBS", "SIMO"],
+        "tickers": ["MU", "WDC", "STX", "RMBS", "SIMO", "SNDK"],
     },
     "Optical Communication": {
         "description": "AI data-center optical networking and transport equipment",
-        "tickers": ["COHR", "LITE", "CIEN", "FN", "AAOI"],
+        "tickers": ["COHR", "LITE", "CIEN", "FN", "AAOI", "NOK", "MRVL", "GLW", "KOPN", "AXTI"],
     },
     "Electric Power / Grid": {
         "description": "Power generation, grid equipment, electrification, and AI data-center power demand",
-        "tickers": ["CEG", "VST", "NEE", "ETN", "PWR", "GEV", "GNRC"],
+        "tickers": ["CEG", "VST", "NEE", "ETN", "PWR", "GEV", "GNRC", "BE", "EOSE", "TSLA", "VRT"],
     },
     "CPU / Advanced Packaging": {
         "description": "CPU designers, foundry, packaging, and semiconductor equipment",
-        "tickers": ["AMD", "INTC", "ARM", "TSM", "AMKR", "ASML", "AMAT", "KLAC"],
+        "tickers": ["AMD", "INTC", "ARM", "TSM", "AMKR", "ASML", "AMAT", "KLAC", "ONTO", "ASX", "ALAB", "ALMU", "PENG"],
     },
     "Space": {
         "description": "Launch, satellites, space connectivity, and geospatial intelligence",
-        "tickers": ["RKLB", "ASTS", "LUNR", "IRDM", "PL", "VSAT"],
+        "tickers": ["RKLB", "ASTS", "LUNR", "IRDM", "PL", "VSAT", "RDW", "SIDU"],
     },
     "Drones / Autonomy": {
         "description": "Unmanned systems, defense autonomy, and tactical aerospace",
@@ -55,11 +55,11 @@ THEME_BASKETS = {
     },
     "AI Infrastructure": {
         "description": "AI accelerators, networking, servers, and data-center electrical infrastructure",
-        "tickers": ["NVDA", "AVGO", "ANET", "VRT", "DELL", "SMCI", "ETN"],
+        "tickers": ["NVDA", "AVGO", "ANET", "VRT", "DELL", "SMCI", "ETN", "MRVL", "PENG", "ALAB", "CRWV", "NBIS", "IREN", "AMD", "INTC", "TSM", "AMAT", "OSS"],
     },
     "AI Software / Data": {
         "description": "Enterprise AI software, data platforms, cloud software, and analytics",
-        "tickers": ["MSFT", "PLTR", "SNOW", "MDB", "NOW", "ORCL"],
+        "tickers": ["MSFT", "PLTR", "SNOW", "MDB", "NOW", "ORCL", "APP", "FIG"],
     },
     "Cybersecurity": {
         "description": "Cloud, endpoint, identity, and network security",
@@ -67,7 +67,7 @@ THEME_BASKETS = {
     },
     "Robotics / Automation": {
         "description": "Industrial automation, surgical robotics, warehouse automation, and applied robotics",
-        "tickers": ["BOTZ", "ISRG", "TER", "ROK", "SYM", "HON"],
+        "tickers": ["BOTZ", "ISRG", "TER", "ROK", "SYM", "HON", "KULR"],
     },
     "Defense / Aerospace": {
         "description": "Prime defense contractors, aerospace suppliers, and defense ETF proxy",
