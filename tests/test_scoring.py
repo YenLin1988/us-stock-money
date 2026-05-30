@@ -68,6 +68,9 @@ class ScoringTests(unittest.TestCase):
             {
                 "ticker": "MU",
                 "themes": "Memory / HBM",
+                "open_price": 100,
+                "last_price": 105,
+                "open_to_current_pct": 5,
                 "flow_score": 90,
                 "return_5d": 4,
                 "return_20d": 10,
@@ -78,6 +81,9 @@ class ScoringTests(unittest.TestCase):
             {
                 "ticker": "XLV",
                 "themes": "Medical / Devices",
+                "open_price": 100,
+                "last_price": 98,
+                "open_to_current_pct": -2,
                 "flow_score": 50,
                 "return_5d": 1,
                 "return_20d": 2,
@@ -88,6 +94,9 @@ class ScoringTests(unittest.TestCase):
         ]
         recs = build_top_recommendations(rows, {"Memory / HBM": 85, "Medical / Devices": 45}, limit=1)
         self.assertEqual(recs[0]["ticker"], "MU")
+        self.assertEqual(recs[0]["open_price"], 100)
+        self.assertEqual(recs[0]["last_price"], 105)
+        self.assertEqual(recs[0]["open_to_current_pct"], 5)
         self.assertIn("flow score", recs[0]["reason"])
 
     def test_flow_delta_uses_last_record_before_cutoff(self):

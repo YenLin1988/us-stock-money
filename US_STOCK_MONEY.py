@@ -45,6 +45,15 @@ st.markdown(
         background: #111820;
     }
     .small-label { color: #8b949e; font-size: 0.82rem; }
+    .price-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        margin-top: 0.65rem;
+        font-size: 0.86rem;
+    }
+    .positive-pct { color: #3fb950; font-weight: 700; }
+    .negative-pct { color: #f85149; font-weight: 700; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -93,6 +102,14 @@ def watchlist_theme_labels(theme_df: pd.DataFrame) -> pd.DataFrame:
         lambda value: ", ".join([ticker for ticker in str(value).split(", ") if ticker in watchlist])
     )
     return display
+
+
+def pct_color_class(value: float) -> str:
+    return "positive-pct" if value >= 0 else "negative-pct"
+
+
+def fmt_price(value: float) -> str:
+    return f"${value:,.2f}"
 
 
 def main() -> None:
@@ -182,7 +199,7 @@ def main() -> None:
     else:
         st.warning(f"**{intraday_signal.title}** - {intraday_signal.message}")
     if not intraday_df.empty:
-        st.dataframe(format_intraday_table(intraday_df), use_container_width=True, hide_index=True)
+        st.dataframe(format_intraday_table(intraday_df), width="stretch", hide_index=True)
     with st.expander("5m intraday evidence", expanded=False):
         st.metric("Intraday Timing Score", f"{intraday_signal.score:.0f}/100")
         for item in intraday_signal.evidence:
@@ -192,6 +209,7 @@ def main() -> None:
     st.caption("Ranked by component money-flow score plus related theme strength. Research signal only, not financial advice.")
     rec_cols = st.columns(5)
     for col, rec in zip(rec_cols, recommendations, strict=False):
+        open_to_current_pct = float(rec["open_to_current_pct"])
         with col:
             st.markdown(
                 f"""
@@ -201,33 +219,50 @@ def main() -> None:
                     <div class="small-label">{rec["themes"]}</div>
                     <p style="font-size: 1.35rem; margin: 0.6rem 0 0.2rem 0;">{float(rec["composite_score"]):.1f}</p>
                     <div class="small-label">Composite score</div>
+                    <div class="price-row">
+                        <span class="small-label">{fmt_price(float(rec["open_price"]))} -> {fmt_price(float(rec["last_price"]))}</span>
+                        <span class="{pct_color_class(open_to_current_pct)}">{fmt_pct(open_to_current_pct)}</span>
+                    </div>
+                    <div class="small-label">Open -> Current</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
     rec_display = pd.DataFrame(recommendations)
     if not rec_display.empty:
-        for column in ["return_5d", "return_20d", "relative_5d", "dollar_volume_trend"]:
-            rec_display[column] = rec_display[column].map(fmt_pct)
-        for column in ["flow_score", "theme_score", "composite_score", "volume_zscore"]:
-            rec_display[column] = rec_display[column].map(lambda x: f"{x:.1f}")
+        rec_columns = [
+            "ticker",
+            "themes",
+            "open_price",
+            "last_price",
+            "open_to_current_pct",
+            "composite_score",
+            "flow_score",
+            "theme_score",
+            "return_5d",
+            "return_20d",
+            "relative_5d",
+            "dollar_volume_trend",
+            "volume_zscore",
+            "reason",
+        ]
+        pct_columns = ["open_to_current_pct", "return_5d", "return_20d", "relative_5d", "dollar_volume_trend"]
+        score_columns = ["flow_score", "theme_score", "composite_score", "volume_zscore"]
+        rec_styled = rec_display[rec_columns].style.format(
+            {
+                "open_price": fmt_price,
+                "last_price": fmt_price,
+                **{column: fmt_pct for column in pct_columns},
+                **{column: "{:.1f}" for column in score_columns},
+            }
+        )
+        rec_styled = rec_styled.map(
+            lambda value: "color: #3fb950; font-weight: 700" if value >= 0 else "color: #f85149; font-weight: 700",
+            subset=["open_to_current_pct"],
+        )
         st.dataframe(
-            rec_display[
-                [
-                    "ticker",
-                    "themes",
-                    "composite_score",
-                    "flow_score",
-                    "theme_score",
-                    "return_5d",
-                    "return_20d",
-                    "relative_5d",
-                    "dollar_volume_trend",
-                    "volume_zscore",
-                    "reason",
-                ]
-            ],
-            use_container_width=True,
+            rec_styled,
+            width="stretch",
             hide_index=True,
         )
 
@@ -259,7 +294,7 @@ def main() -> None:
                     "volume_zscore",
                 ]
             ],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -278,7 +313,7 @@ def main() -> None:
         fig.update_layout(template="plotly_dark", paper_bgcolor="#0b0f14", plot_bgcolor="#0b0f14", height=430)
         fig.update_xaxes(tickangle=-35)
         fig.update_yaxes(range=[0, 100], title="Flow Score")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     with right:
         radar = go.Figure()
@@ -298,7 +333,7 @@ def main() -> None:
             title="Rotation Map",
             height=430,
         )
-        st.plotly_chart(radar, use_container_width=True)
+        st.plotly_chart(radar, width="stretch")
 
     st.subheader("Theme Table")
     display_df = watchlist_theme_labels(theme_df)
@@ -306,14 +341,14 @@ def main() -> None:
         display_df[column] = display_df[column].map(fmt_pct)
     display_df["flow_score"] = display_df["flow_score"].map(lambda x: f"{x:.1f}")
     display_df["dollar_volume_m"] = display_df["dollar_volume_m"].map(lambda x: f"${x:,.0f}M")
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
+    st.dataframe(display_df, width="stretch", hide_index=True)
 
     tab1, tab2, tab3 = st.tabs(["Components", "Sector ETFs", "Benchmarks"])
     with tab1:
         show_watchlist_only = st.checkbox("Show selected watchlist only", value=True)
         component_source = component_df[component_df["ticker"].isin(WATCHLIST_TICKERS)] if show_watchlist_only else component_df
         component_display = format_component_table(component_source)
-        st.dataframe(component_display, use_container_width=True, hide_index=True)
+        st.dataframe(component_display, width="stretch", hide_index=True)
 
     with tab2:
         sector_display = sector_df.copy()
@@ -321,7 +356,7 @@ def main() -> None:
             sector_display[column] = sector_display[column].map(fmt_pct)
         sector_display["flow_score"] = sector_display["flow_score"].map(lambda x: f"{x:.1f}")
         sector_display["dollar_volume_m"] = sector_display["dollar_volume_m"].map(lambda x: f"${x:,.0f}M")
-        st.dataframe(sector_display, use_container_width=True, hide_index=True)
+        st.dataframe(sector_display, width="stretch", hide_index=True)
 
     with tab3:
         st.subheader("Benchmark Pulse")
@@ -329,7 +364,7 @@ def main() -> None:
             bench_display = bench_df.copy()
             for column in ["return_1d", "return_5d", "return_20d"]:
                 bench_display[column] = bench_display[column].map(fmt_pct)
-            st.dataframe(bench_display, use_container_width=True, hide_index=True)
+            st.dataframe(bench_display, width="stretch", hide_index=True)
 
     st.subheader("Alerts")
     if alerts:
@@ -345,7 +380,7 @@ def main() -> None:
             hist_fig = px.line(hist_df.tail(200), x="time", y="broad_flow_score", title="Broad Flow Score History")
             hist_fig.update_layout(template="plotly_dark", paper_bgcolor="#0b0f14", plot_bgcolor="#0b0f14", height=320)
             hist_fig.update_yaxes(range=[0, 100])
-            st.plotly_chart(hist_fig, use_container_width=True)
+            st.plotly_chart(hist_fig, width="stretch")
 
     st.caption("Research tool only. Theme flow scores are proxies derived from price and volume, not official fund-flow data.")
 

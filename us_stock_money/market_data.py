@@ -121,19 +121,24 @@ def build_theme_table(data: pd.DataFrame) -> pd.DataFrame:
 
 def build_component_table(data: pd.DataFrame) -> pd.DataFrame:
     close = _field(data, "Close")
+    open_prices = _field(data, "Open")
     volume = _field(data, "Volume")
     dollar_volume = close * volume
 
     rows = []
     theme_tickers = sorted({ticker for basket in THEME_BASKETS.values() for ticker in basket["tickers"]})
     for ticker in theme_tickers:
-        if ticker not in close or ticker not in volume:
+        if ticker not in close or ticker not in open_prices or ticker not in volume:
             continue
         prices = close[ticker].dropna()
+        opens = open_prices[ticker].dropna()
         vols = volume[ticker].dropna()
-        if len(prices) < 25 or len(vols) < 25:
+        if len(prices) < 25 or len(opens) < 25 or len(vols) < 25:
             continue
 
+        current_price = float(prices.iloc[-1])
+        open_price = float(opens.iloc[-1])
+        open_to_current_pct = ((current_price / open_price) - 1) * 100 if open_price else 0.0
         returns = _returns(prices)
         ret_1d = _pct_change(prices, 1)
         ret_5d = _pct_change(prices, 5)
@@ -163,7 +168,9 @@ def build_component_table(data: pd.DataFrame) -> pd.DataFrame:
             {
                 "ticker": ticker,
                 "themes": ", ".join(_themes_for_ticker(ticker)),
-                "last_price": float(prices.iloc[-1]),
+                "open_price": open_price,
+                "last_price": current_price,
+                "open_to_current_pct": open_to_current_pct,
                 "return_1d": ret_1d,
                 "return_5d": ret_5d,
                 "return_20d": ret_20d,
