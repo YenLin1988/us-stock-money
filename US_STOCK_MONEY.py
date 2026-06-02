@@ -7,6 +7,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 from us_stock_money.alerts import evaluate_alerts
 from us_stock_money.market_data import (
@@ -151,7 +152,34 @@ def exit_signal_class(value: object) -> str:
     }.get(str(value), "exit-watch")
 
 
+def configure_auto_refresh() -> None:
+    with st.sidebar:
+        st.subheader("Auto Refresh")
+        enabled = st.toggle("Enable auto refresh", value=True)
+        interval_seconds = st.selectbox(
+            "Refresh interval",
+            options=[60, 180, 300, 600, 900],
+            index=2,
+            format_func=lambda seconds: f"{seconds // 60} min",
+            disabled=not enabled,
+        )
+        st.caption(f"Last rendered: {dt.datetime.now().strftime('%H:%M:%S')}")
+    if enabled:
+        components.html(
+            f"""
+            <script>
+            window.setTimeout(function() {{
+                window.parent.location.reload();
+            }}, {interval_seconds * 1000});
+            </script>
+            """,
+            height=0,
+        )
+
+
 def main() -> None:
+    configure_auto_refresh()
+
     st.title("US STOCK MONEY")
     st.caption("US thematic money-flow radar: AI compute chain, power, defense, space, rare earths, nuclear, medical, and other rotation themes.")
 
