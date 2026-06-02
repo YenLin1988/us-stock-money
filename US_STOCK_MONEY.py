@@ -56,6 +56,26 @@ st.markdown(
         margin-top: 0.65rem;
         font-size: 0.86rem;
     }
+    .exit-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        margin-top: 0.75rem;
+        padding-top: 0.65rem;
+        border-top: 1px solid #30363d;
+        font-size: 0.86rem;
+    }
+    .exit-signal {
+        border-radius: 999px;
+        padding: 2px 9px;
+        font-weight: 700;
+        white-space: nowrap;
+    }
+    .exit-hold { color: #3fb950; background: rgba(63, 185, 80, 0.12); }
+    .exit-watch { color: #d29922; background: rgba(210, 153, 34, 0.14); }
+    .exit-trim { color: #d29922; background: rgba(210, 153, 34, 0.14); }
+    .exit-exit { color: #f85149; background: rgba(248, 81, 73, 0.12); }
     .positive-pct { color: #3fb950; font-weight: 700; }
     .negative-pct { color: #f85149; font-weight: 700; }
     </style>
@@ -120,6 +140,15 @@ def pct_color_class(value: float) -> str:
 
 def fmt_price(value: float) -> str:
     return f"${value:,.2f}"
+
+
+def exit_signal_class(value: object) -> str:
+    return {
+        "Hold": "exit-hold",
+        "Watch": "exit-watch",
+        "Trim": "exit-trim",
+        "Exit": "exit-exit",
+    }.get(str(value), "exit-watch")
 
 
 def main() -> None:
@@ -227,6 +256,8 @@ def main() -> None:
         breakout_cols = st.columns(5)
         for index, candidate in enumerate(intraday_breakout_candidates, start=1):
             day_return = float(candidate["day_return"])
+            signal = str(candidate["exit_signal"])
+            signal_class = exit_signal_class(signal)
             with breakout_cols[index - 1]:
                 st.markdown(
                     f"""
@@ -241,6 +272,10 @@ def main() -> None:
                             <span class="{pct_color_class(day_return)}">{fmt_pct(day_return)}</span>
                         </div>
                         <div class="small-label">Session open -> latest</div>
+                        <div class="exit-row">
+                            <span class="small-label">Exit signal</span>
+                            <span class="exit-signal {signal_class}">{signal}</span>
+                        </div>
                     </div>
                     """,
                     unsafe_allow_html=True,
