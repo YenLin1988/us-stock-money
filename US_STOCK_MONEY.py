@@ -259,6 +259,8 @@ def main() -> None:
             "volume_trend",
             "recent_dollar_volume_m",
             "breakout_score",
+            "exit_signal",
+            "exit_reason",
             "reason",
         ]
         pct_columns = ["day_return", "return_30m", "return_60m", "vwap_gap_pct", "volume_trend"]
@@ -274,6 +276,15 @@ def main() -> None:
         breakout_styled = breakout_styled.map(
             lambda value: "color: #3fb950; font-weight: 700" if value >= 0 else "color: #f85149; font-weight: 700",
             subset=["day_return", "return_30m", "return_60m", "vwap_gap_pct"],
+        )
+        breakout_styled = breakout_styled.map(
+            lambda value: {
+                "Hold": "color: #3fb950; font-weight: 700",
+                "Watch": "color: #d29922; font-weight: 700",
+                "Trim": "color: #d29922; font-weight: 700",
+                "Exit": "color: #f85149; font-weight: 700",
+            }.get(value, ""),
+            subset=["exit_signal"],
         )
         st.dataframe(
             breakout_styled,

@@ -180,9 +180,55 @@ def build_intraday_breakout_candidates(intraday_rows, limit: int = 5) -> list[di
                 "recent_dollar_volume_m": float(row.get("recent_dollar_volume_m", 0.0)),
                 "breakout_score": breakout_score,
                 "reason": intraday_breakout_reason(row, breakout_score),
+                **intraday_exit_signal(row),
             }
         )
     return sorted(candidates, key=lambda item: float(item["breakout_score"]), reverse=True)[:limit]
+
+
+def intraday_exit_signal(row: Mapping[str, object]) -> dict[str, str]:
+    """Classify whether a 5m breakout candidate still deserves holding."""
+    day_return = float(row.get("day_return", 0.0))
+    return_30m = float(row.get("return_30m", 0.0))
+    return_60m = float(row.get("return_60m", 0.0))
+    vwap_gap_pct = float(row.get("vwap_gap_pct", 0.0))
+    volume_trend = float(row.get("volume_trend", 0.0))
+    below_vwap = bool(row.get("below_vwap", False))
+
+    if below_vwap and return_30m < 0:
+        return {
+            "exit_signal": "Exit",
+            "exit_reason": "Below VWAP with negative 30m momentum.",
+        }
+    if return_30m <= -0.75 and return_60m <= -0.50:
+        return {
+            "exit_signal": "Exit",
+            "exit_reason": "30m and 60m momentum both rolled over.",
+        }
+    if day_return >= 5 and return_30m < 0:
+        return {
+            "exit_signal": "Trim",
+            "exit_reason": "Large session gain, but short-term momentum is cooling.",
+        }
+    if below_vwap:
+        return {
+            "exit_signal": "Trim",
+            "exit_reason": "Price is below VWAP; reduce risk unless it reclaims quickly.",
+        }
+    if return_30m < 0 and volume_trend < 0:
+        return {
+            "exit_signal": "Trim",
+            "exit_reason": "Momentum and 5m volume trend are fading together.",
+        }
+    if vwap_gap_pct >= 0 and return_30m >= 0:
+        return {
+            "exit_signal": "Hold",
+            "exit_reason": "Above VWAP with non-negative 30m momentum.",
+        }
+    return {
+        "exit_signal": "Watch",
+        "exit_reason": "Mixed 5m conditions; wait for VWAP or 30m confirmation.",
+    }
 
 
 def intraday_breakout_reason(row: Mapping[str, object], breakout_score: float) -> str:

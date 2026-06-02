@@ -173,7 +173,44 @@ class ScoringTests(unittest.TestCase):
         candidates = build_intraday_breakout_candidates(rows, limit=2)
         self.assertEqual(candidates[0]["ticker"], "NOK")
         self.assertGreater(candidates[0]["breakout_score"], 90)
+        self.assertEqual(candidates[0]["exit_signal"], "Hold")
         self.assertIn("last 30m momentum", candidates[0]["reason"])
+
+    def test_intraday_breakout_candidates_include_exit_signals(self):
+        rows = [
+            {
+                "ticker": "EXIT",
+                "themes": "Test",
+                "session_open": 10,
+                "last_price": 10.2,
+                "day_return": 2.0,
+                "return_30m": -1.0,
+                "return_60m": -0.7,
+                "vwap": 10.4,
+                "vwap_gap_pct": -1.9,
+                "below_vwap": True,
+                "volume_trend": 80.0,
+                "recent_dollar_volume_m": 5.0,
+            },
+            {
+                "ticker": "TRIM",
+                "themes": "Test",
+                "session_open": 10,
+                "last_price": 10.6,
+                "day_return": 6.0,
+                "return_30m": -0.2,
+                "return_60m": 1.0,
+                "vwap": 10.3,
+                "vwap_gap_pct": 2.9,
+                "below_vwap": False,
+                "volume_trend": 90.0,
+                "recent_dollar_volume_m": 5.0,
+            },
+        ]
+        candidates = {row["ticker"]: row for row in build_intraday_breakout_candidates(rows, limit=2)}
+        self.assertEqual(candidates["EXIT"]["exit_signal"], "Exit")
+        self.assertEqual(candidates["TRIM"]["exit_signal"], "Trim")
+        self.assertIn("VWAP", candidates["EXIT"]["exit_reason"])
 
     def test_flow_delta_uses_last_record_before_cutoff(self):
         now = datetime.datetime(2026, 5, 27, 12, 0)
