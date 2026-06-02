@@ -29,11 +29,11 @@ THEME_BASKETS = {
     },
     "Electric Power / Grid": {
         "description": "Power generation, grid equipment, electrification, and AI data-center power demand",
-        "tickers": ["CEG", "VST", "NEE", "ETN", "PWR", "GEV", "GNRC", "BE", "EOSE", "TSLA", "VRT"],
+        "tickers": ["CEG", "VST", "NEE", "ETN", "PWR", "GEV", "GNRC", "BE", "EOSE", "TSLA", "VRT", "FLNC"],
     },
     "CPU / Advanced Packaging": {
         "description": "CPU designers, foundry, packaging, and semiconductor equipment",
-        "tickers": ["AMD", "INTC", "ARM", "TSM", "AMKR", "ASML", "AMAT", "KLAC", "ONTO", "ASX", "ALAB", "ALMU", "PENG"],
+        "tickers": ["AMD", "INTC", "ARM", "TSM", "AMKR", "ASML", "AMAT", "KLAC", "ONTO", "ASX", "ALAB", "ALMU", "PENG", "TXN", "NXPI", "ON", "MCHP"],
     },
     "Space": {
         "description": "Launch, satellites, space connectivity, and geospatial intelligence",
@@ -57,7 +57,7 @@ THEME_BASKETS = {
     },
     "AI Infrastructure": {
         "description": "AI accelerators, networking, servers, and data-center electrical infrastructure",
-        "tickers": ["NVDA", "AVGO", "ANET", "VRT", "DELL", "SMCI", "ETN", "MRVL", "PENG", "ALAB", "CRWV", "NBIS", "IREN", "AMD", "INTC", "TSM", "AMAT", "OSS"],
+        "tickers": ["NVDA", "AVGO", "ANET", "VRT", "DELL", "SMCI", "ETN", "MRVL", "PENG", "ALAB", "CRWV", "NBIS", "IREN", "AMD", "INTC", "TSM", "AMAT", "OSS", "HPE"],
     },
     "AI Software / Data": {
         "description": "Enterprise AI software, data platforms, cloud software, and analytics",
@@ -82,7 +82,8 @@ WATCHLIST_TICKERS = [
     "KULR", "KOPN", "IREN", "IRDM", "INTC", "FIG", "AVGO", "ASX", "AMD",
     "AMAT", "ALAB", "ALMU", "APP", "CRWD", "CRWV", "EOSE", "ETN", "GLW",
     "PL", "RDW", "RKLB", "SNDK", "SIDU", "VST", "AXTI", "NBIS", "OSS",
-    "MP", "UUUU", "TSLA", "TSM", "AVAV", "RCAT", "RTX",
+    "MP", "UUUU", "TSLA", "TSM", "AVAV", "RCAT", "RTX", "FLNC", "TXN",
+    "NXPI", "ON", "MCHP", "HPE",
 ]
 
 THEME_GROUPS = {
