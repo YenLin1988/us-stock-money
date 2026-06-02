@@ -3,6 +3,7 @@ import unittest
 
 from us_stock_money.scoring import (
     broad_flow_score,
+    build_breakout_candidates,
     build_top_recommendations,
     classify_regime,
     flow_delta,
@@ -98,6 +99,42 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(recs[0]["last_price"], 105)
         self.assertEqual(recs[0]["open_to_current_pct"], 5)
         self.assertIn("flow score", recs[0]["reason"])
+
+    def test_breakout_candidates_reward_single_stock_surge(self):
+        rows = [
+            {
+                "ticker": "NOK",
+                "themes": "Optical Communication",
+                "open_price": 5.10,
+                "last_price": 5.55,
+                "open_to_current_pct": 8.82,
+                "flow_score": 97.6,
+                "return_1d": 9.5,
+                "return_5d": 14.0,
+                "return_20d": 18.0,
+                "relative_5d": 12.0,
+                "dollar_volume_trend": 101.6,
+                "volume_zscore": 1.7,
+            },
+            {
+                "ticker": "NOW",
+                "themes": "AI Software / Data",
+                "open_price": 1000,
+                "last_price": 1004,
+                "open_to_current_pct": 0.4,
+                "flow_score": 92.0,
+                "return_1d": 0.8,
+                "return_5d": 6.0,
+                "return_20d": 14.0,
+                "relative_5d": 4.0,
+                "dollar_volume_trend": 18.0,
+                "volume_zscore": 0.3,
+            },
+        ]
+        candidates = build_breakout_candidates(rows, limit=2)
+        self.assertEqual(candidates[0]["ticker"], "NOK")
+        self.assertGreater(candidates[0]["breakout_score"], candidates[1]["breakout_score"])
+        self.assertIn("open-to-current", candidates[0]["reason"])
 
     def test_flow_delta_uses_last_record_before_cutoff(self):
         now = datetime.datetime(2026, 5, 27, 12, 0)

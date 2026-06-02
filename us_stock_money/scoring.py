@@ -107,6 +107,75 @@ def build_top_recommendations(component_rows, theme_scores: Mapping[str, float],
     return sorted(recommendations, key=lambda item: float(item["composite_score"]), reverse=True)[:limit]
 
 
+def build_breakout_candidates(component_rows, limit: int = 5) -> list[dict[str, object]]:
+    """Rank single-stock breakout candidates independent of their theme basket score."""
+    candidates = []
+    for row in _iter_records(component_rows):
+        flow_score = float(row.get("flow_score", 0.0))
+        open_to_current_pct = float(row.get("open_to_current_pct", 0.0))
+        return_1d = float(row.get("return_1d", 0.0))
+        dollar_volume_trend = float(row.get("dollar_volume_trend", 0.0))
+        volume_zscore = float(row.get("volume_zscore", 0.0))
+        breakout_score = (
+            normalize(open_to_current_pct, 0.0, 8.0) * 0.25
+            + normalize(return_1d, 0.0, 8.0) * 0.20
+            + normalize(volume_zscore, 0.0, 2.5) * 0.20
+            + normalize(dollar_volume_trend, 0.0, 100.0) * 0.20
+            + normalize(flow_score, 70.0, 100.0) * 0.15
+        )
+        themes = [theme.strip() for theme in str(row.get("themes", "")).split(",") if theme.strip()]
+        candidates.append(
+            {
+                "ticker": row.get("ticker", ""),
+                "themes": ", ".join(themes),
+                "open_price": float(row.get("open_price", 0.0)),
+                "last_price": float(row.get("last_price", 0.0)),
+                "open_to_current_pct": open_to_current_pct,
+                "flow_score": flow_score,
+                "breakout_score": breakout_score,
+                "return_1d": return_1d,
+                "return_5d": float(row.get("return_5d", 0.0)),
+                "return_20d": float(row.get("return_20d", 0.0)),
+                "relative_5d": float(row.get("relative_5d", 0.0)),
+                "dollar_volume_trend": dollar_volume_trend,
+                "volume_zscore": volume_zscore,
+                "reason": breakout_reason(row, breakout_score),
+            }
+        )
+    return sorted(candidates, key=lambda item: float(item["breakout_score"]), reverse=True)[:limit]
+
+
+def breakout_reason(row: Mapping[str, object], breakout_score: float) -> str:
+    reasons = []
+    flow_score = float(row.get("flow_score", 0.0))
+    open_to_current_pct = float(row.get("open_to_current_pct", 0.0))
+    return_1d = float(row.get("return_1d", 0.0))
+    dollar_volume_trend = float(row.get("dollar_volume_trend", 0.0))
+    volume_zscore = float(row.get("volume_zscore", 0.0))
+
+    if open_to_current_pct >= 5:
+        reasons.append(f"open-to-current move is {open_to_current_pct:+.1f}%")
+    elif open_to_current_pct > 0:
+        reasons.append(f"open-to-current move is positive at {open_to_current_pct:+.1f}%")
+
+    if return_1d >= 5:
+        reasons.append(f"1D move is {return_1d:+.1f}%")
+    elif return_1d > 0:
+        reasons.append(f"1D move is positive at {return_1d:+.1f}%")
+
+    if volume_zscore >= 1:
+        reasons.append(f"volume shock is {volume_zscore:+.1f} z-score")
+    if dollar_volume_trend >= 25:
+        reasons.append(f"dollar volume trend is {dollar_volume_trend:+.1f}%")
+    if flow_score >= 85:
+        reasons.append(f"flow score is strong at {flow_score:.1f}/100")
+
+    if not reasons:
+        reasons.append(f"breakout setup score is {breakout_score:.1f}/100")
+
+    return "; ".join(reasons[:4]) + "."
+
+
 def recommendation_reason(row: Mapping[str, object], theme_score: float) -> str:
     reasons = []
     flow_score = float(row.get("flow_score", 0.0))

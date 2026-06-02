@@ -21,6 +21,7 @@ from us_stock_money.market_data import (
 from us_stock_money.model_config import MARKET_DATA_VERSION, WATCHLIST_TICKERS
 from us_stock_money.scoring import (
     broad_flow_score,
+    build_breakout_candidates,
     build_top_recommendations,
     classify_regime,
     flow_delta,
@@ -170,6 +171,7 @@ def main() -> None:
         }
     )
     recommendations = build_top_recommendations(component_df, theme_scores, limit=5)
+    breakout_candidates = build_breakout_candidates(component_df, limit=5)
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Regime", regime.name)
@@ -204,6 +206,66 @@ def main() -> None:
         st.metric("Intraday Timing Score", f"{intraday_signal.score:.0f}/100")
         for item in intraday_signal.evidence:
             st.caption(item)
+
+    st.subheader("Top 5 Breakout Candidates")
+    st.caption("Ranked by single-stock breakout pressure: open-to-current move, 1D move, volume shock, dollar-volume trend, and flow score.")
+    breakout_cols = st.columns(5)
+    for index, candidate in enumerate(breakout_candidates, start=1):
+        open_to_current_pct = float(candidate["open_to_current_pct"])
+        with breakout_cols[index - 1]:
+            st.markdown(
+                f"""
+                <div class="flow-card">
+                    <div class="small-label">#{index} Breakout Candidate</div>
+                    <h3 style="margin: 0.2rem 0 0.1rem 0;">{candidate["ticker"]}</h3>
+                    <div class="small-label">{candidate["themes"]}</div>
+                    <p style="font-size: 1.35rem; margin: 0.6rem 0 0.2rem 0;">{float(candidate["breakout_score"]):.1f}</p>
+                    <div class="small-label">Breakout score</div>
+                    <div class="price-row">
+                        <span class="small-label">{fmt_price(float(candidate["open_price"]))} -> {fmt_price(float(candidate["last_price"]))}</span>
+                        <span class="{pct_color_class(open_to_current_pct)}">{fmt_pct(open_to_current_pct)}</span>
+                    </div>
+                    <div class="small-label">Open -> Current</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+    breakout_display = pd.DataFrame(breakout_candidates)
+    if not breakout_display.empty:
+        breakout_columns = [
+            "ticker",
+            "themes",
+            "open_price",
+            "last_price",
+            "open_to_current_pct",
+            "breakout_score",
+            "flow_score",
+            "return_1d",
+            "return_5d",
+            "relative_5d",
+            "dollar_volume_trend",
+            "volume_zscore",
+            "reason",
+        ]
+        pct_columns = ["open_to_current_pct", "return_1d", "return_5d", "relative_5d", "dollar_volume_trend"]
+        score_columns = ["breakout_score", "flow_score", "volume_zscore"]
+        breakout_styled = breakout_display[breakout_columns].style.format(
+            {
+                "open_price": fmt_price,
+                "last_price": fmt_price,
+                **{column: fmt_pct for column in pct_columns},
+                **{column: "{:.1f}" for column in score_columns},
+            }
+        )
+        breakout_styled = breakout_styled.map(
+            lambda value: "color: #3fb950; font-weight: 700" if value >= 0 else "color: #f85149; font-weight: 700",
+            subset=["open_to_current_pct", "return_1d"],
+        )
+        st.dataframe(
+            breakout_styled,
+            width="stretch",
+            hide_index=True,
+        )
 
     st.subheader("Top 5 Flow Candidates")
     st.caption("Ranked by component money-flow score plus related theme strength. Research signal only, not financial advice.")
