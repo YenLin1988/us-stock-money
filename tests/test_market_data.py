@@ -2,7 +2,7 @@ import unittest
 
 import pandas as pd
 
-from us_stock_money.market_data import build_component_table
+from us_stock_money.market_data import build_component_table, build_intraday_component_table
 
 
 class MarketDataTests(unittest.TestCase):
@@ -28,6 +28,26 @@ class MarketDataTests(unittest.TestCase):
         self.assertEqual(row["open_price"], 120.0)
         self.assertEqual(row["last_price"], 126.0)
         self.assertAlmostEqual(row["open_to_current_pct"], 5.0)
+
+    def test_intraday_component_table_includes_5m_breakout_fields(self):
+        periods = pd.date_range("2026-01-02 09:30", periods=18, freq="5min")
+        columns = pd.MultiIndex.from_product(
+            [["Close", "Volume"], ["MU"]],
+            names=["Price", "Ticker"],
+        )
+        data = pd.DataFrame(index=periods, columns=columns, dtype=float)
+        data[("Close", "MU")] = [100.0 + index for index in range(18)]
+        data[("Volume", "MU")] = [1_000_000.0] * 12 + [3_000_000.0] * 6
+
+        rows = build_intraday_component_table(data)
+        row = rows[rows["ticker"] == "MU"].iloc[0]
+
+        self.assertEqual(row["session_open"], 100.0)
+        self.assertEqual(row["last_price"], 117.0)
+        self.assertGreater(row["day_return"], 0)
+        self.assertGreater(row["return_30m"], 0)
+        self.assertGreater(row["vwap_gap_pct"], 0)
+        self.assertGreater(row["volume_trend"], 0)
 
 
 if __name__ == "__main__":

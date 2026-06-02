@@ -145,6 +145,74 @@ def build_breakout_candidates(component_rows, limit: int = 5) -> list[dict[str, 
     return sorted(candidates, key=lambda item: float(item["breakout_score"]), reverse=True)[:limit]
 
 
+def build_intraday_breakout_candidates(intraday_rows, limit: int = 5) -> list[dict[str, object]]:
+    """Rank 5-minute intraday breakout candidates for same-session monitoring."""
+    candidates = []
+    for row in _iter_records(intraday_rows):
+        day_return = float(row.get("day_return", 0.0))
+        return_30m = float(row.get("return_30m", 0.0))
+        return_60m = float(row.get("return_60m", 0.0))
+        vwap_gap_pct = float(row.get("vwap_gap_pct", 0.0))
+        volume_trend = float(row.get("volume_trend", 0.0))
+        above_vwap_score = 0.0 if bool(row.get("below_vwap", False)) else 100.0
+        breakout_score = (
+            normalize(day_return, 0.0, 5.0) * 0.25
+            + normalize(return_30m, 0.0, 3.0) * 0.25
+            + normalize(return_60m, 0.0, 5.0) * 0.15
+            + normalize(volume_trend, 0.0, 200.0) * 0.20
+            + normalize(vwap_gap_pct, 0.0, 3.0) * 0.10
+            + above_vwap_score * 0.05
+        )
+        candidates.append(
+            {
+                "ticker": row.get("ticker", ""),
+                "themes": row.get("themes", ""),
+                "last_time": row.get("last_time", ""),
+                "session_open": float(row.get("session_open", 0.0)),
+                "last_price": float(row.get("last_price", 0.0)),
+                "day_return": day_return,
+                "return_30m": return_30m,
+                "return_60m": return_60m,
+                "vwap": float(row.get("vwap", 0.0)),
+                "vwap_gap_pct": vwap_gap_pct,
+                "below_vwap": bool(row.get("below_vwap", False)),
+                "volume_trend": volume_trend,
+                "recent_dollar_volume_m": float(row.get("recent_dollar_volume_m", 0.0)),
+                "breakout_score": breakout_score,
+                "reason": intraday_breakout_reason(row, breakout_score),
+            }
+        )
+    return sorted(candidates, key=lambda item: float(item["breakout_score"]), reverse=True)[:limit]
+
+
+def intraday_breakout_reason(row: Mapping[str, object], breakout_score: float) -> str:
+    reasons = []
+    day_return = float(row.get("day_return", 0.0))
+    return_30m = float(row.get("return_30m", 0.0))
+    return_60m = float(row.get("return_60m", 0.0))
+    vwap_gap_pct = float(row.get("vwap_gap_pct", 0.0))
+    volume_trend = float(row.get("volume_trend", 0.0))
+    below_vwap = bool(row.get("below_vwap", False))
+
+    if day_return >= 2:
+        reasons.append(f"session move is {day_return:+.1f}%")
+    elif day_return > 0:
+        reasons.append(f"session move is positive at {day_return:+.1f}%")
+    if return_30m >= 1:
+        reasons.append(f"last 30m momentum is {return_30m:+.1f}%")
+    if return_60m >= 2:
+        reasons.append(f"last 60m momentum is {return_60m:+.1f}%")
+    if vwap_gap_pct > 0 and not below_vwap:
+        reasons.append(f"trading {vwap_gap_pct:+.1f}% above VWAP")
+    if volume_trend >= 50:
+        reasons.append(f"5m volume trend is {volume_trend:+.1f}%")
+
+    if not reasons:
+        reasons.append(f"5m breakout setup score is {breakout_score:.1f}/100")
+
+    return "; ".join(reasons[:4]) + "."
+
+
 def breakout_reason(row: Mapping[str, object], breakout_score: float) -> str:
     reasons = []
     flow_score = float(row.get("flow_score", 0.0))

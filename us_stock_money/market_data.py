@@ -25,6 +25,11 @@ def download_intraday_prices(period: str = "5d", interval: str = "5m") -> pd.Dat
     return download_prices(period=period, interval=interval, tickers=list(INTRADAY_BENCHMARKS))
 
 
+def download_intraday_component_prices(period: str = "5d", interval: str = "5m") -> pd.DataFrame:
+    tickers = sorted({ticker for basket in THEME_BASKETS.values() for ticker in basket["tickers"]})
+    return download_prices(period=period, interval=interval, tickers=tickers)
+
+
 def _download_in_chunks(tickers: list[str], period: str, interval: str, chunk_size: int = 35) -> pd.DataFrame:
     frames = []
     for start in range(0, len(tickers), chunk_size):
@@ -313,6 +318,58 @@ def build_intraday_market_table(data: pd.DataFrame) -> pd.DataFrame:
                 "vwap": vwap,
                 "below_vwap": below_vwap,
                 "volume_trend": volume_trend,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def build_intraday_component_table(data: pd.DataFrame) -> pd.DataFrame:
+    close = _field(data, "Close")
+    volume = _field(data, "Volume")
+    rows = []
+    theme_tickers = sorted({ticker for basket in THEME_BASKETS.values() for ticker in basket["tickers"]})
+    for ticker in theme_tickers:
+        if ticker not in close or ticker not in volume:
+            continue
+        prices = close[ticker].dropna()
+        vols = volume[ticker].reindex(prices.index).fillna(0)
+        if len(prices) < 12:
+            continue
+
+        latest_ts = prices.index[-1]
+        latest_session = _session_slice(prices, latest_ts)
+        latest_session_vol = vols.reindex(latest_session.index).fillna(0)
+        if len(latest_session) < 3:
+            continue
+
+        last_price = float(latest_session.iloc[-1])
+        session_open = float(latest_session.iloc[0])
+        day_return = (last_price / session_open - 1) * 100 if session_open else 0.0
+        return_30m = _pct_change(latest_session, 6)
+        return_60m = _pct_change(latest_session, 12)
+        vwap = _vwap(latest_session, latest_session_vol)
+        vwap_gap_pct = (last_price / vwap - 1) * 100 if vwap else 0.0
+        below_vwap = last_price < vwap if vwap else False
+        recent_volume = float(latest_session_vol.tail(6).mean())
+        base_volume = float(vols.tail(120).mean()) if len(vols) >= 120 else float(vols.mean())
+        volume_trend = ((recent_volume / base_volume) - 1) * 100 if base_volume else 0.0
+        recent_dollar_volume = float((latest_session.tail(6) * latest_session_vol.tail(6)).sum())
+
+        rows.append(
+            {
+                "ticker": ticker,
+                "themes": ", ".join(_themes_for_ticker(ticker)),
+                "last_time": str(latest_ts),
+                "last_price": last_price,
+                "session_open": session_open,
+                "day_return": day_return,
+                "return_30m": return_30m,
+                "return_60m": return_60m,
+                "vwap": vwap,
+                "vwap_gap_pct": vwap_gap_pct,
+                "below_vwap": below_vwap,
+                "volume_trend": volume_trend,
+                "recent_dollar_volume_m": recent_dollar_volume / 1_000_000,
             }
         )
     return pd.DataFrame(rows)

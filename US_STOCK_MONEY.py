@@ -12,9 +12,11 @@ from us_stock_money.alerts import evaluate_alerts
 from us_stock_money.market_data import (
     benchmark_table,
     build_component_table,
+    build_intraday_component_table,
     build_intraday_market_table,
     build_sector_table,
     build_theme_table,
+    download_intraday_component_prices,
     download_intraday_prices,
     download_prices,
 )
@@ -22,6 +24,7 @@ from us_stock_money.model_config import MARKET_DATA_VERSION, WATCHLIST_TICKERS
 from us_stock_money.scoring import (
     broad_flow_score,
     build_breakout_candidates,
+    build_intraday_breakout_candidates,
     build_top_recommendations,
     classify_regime,
     flow_delta,
@@ -71,6 +74,12 @@ def load_data(market_data_version: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.
 def load_intraday_data(market_data_version: str) -> pd.DataFrame:
     data = download_intraday_prices(period="5d", interval="5m")
     return build_intraday_market_table(data)
+
+
+@st.cache_data(ttl=300)
+def load_intraday_component_data(market_data_version: str) -> pd.DataFrame:
+    data = download_intraday_component_prices(period="5d", interval="5m")
+    return build_intraday_component_table(data)
 
 
 def fmt_pct(value: float) -> str:
@@ -130,6 +139,10 @@ def main() -> None:
         intraday_df = load_intraday_data(MARKET_DATA_VERSION)
     except Exception:
         intraday_df = pd.DataFrame()
+    try:
+        intraday_component_df = load_intraday_component_data(MARKET_DATA_VERSION)
+    except Exception:
+        intraday_component_df = pd.DataFrame()
 
     theme_scores = dict(zip(theme_df["theme"], theme_df["flow_score"], strict=False))
     groups = theme_group_scores(theme_scores)
@@ -171,7 +184,8 @@ def main() -> None:
         }
     )
     recommendations = build_top_recommendations(component_df, theme_scores, limit=5)
-    breakout_candidates = build_breakout_candidates(component_df, limit=5)
+    intraday_breakout_candidates = build_intraday_breakout_candidates(intraday_component_df, limit=5)
+    daily_breakout_candidates = build_breakout_candidates(component_df, limit=5)
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Regime", regime.name)
@@ -207,65 +221,70 @@ def main() -> None:
         for item in intraday_signal.evidence:
             st.caption(item)
 
-    st.subheader("Top 5 Breakout Candidates")
-    st.caption("Ranked by single-stock breakout pressure: open-to-current move, 1D move, volume shock, dollar-volume trend, and flow score.")
-    breakout_cols = st.columns(5)
-    for index, candidate in enumerate(breakout_candidates, start=1):
-        open_to_current_pct = float(candidate["open_to_current_pct"])
-        with breakout_cols[index - 1]:
-            st.markdown(
-                f"""
-                <div class="flow-card">
-                    <div class="small-label">#{index} Breakout Candidate</div>
-                    <h3 style="margin: 0.2rem 0 0.1rem 0;">{candidate["ticker"]}</h3>
-                    <div class="small-label">{candidate["themes"]}</div>
-                    <p style="font-size: 1.35rem; margin: 0.6rem 0 0.2rem 0;">{float(candidate["breakout_score"]):.1f}</p>
-                    <div class="small-label">Breakout score</div>
-                    <div class="price-row">
-                        <span class="small-label">{fmt_price(float(candidate["open_price"]))} -> {fmt_price(float(candidate["last_price"]))}</span>
-                        <span class="{pct_color_class(open_to_current_pct)}">{fmt_pct(open_to_current_pct)}</span>
+    st.subheader("Top 5 5m Breakout Candidates")
+    if intraday_breakout_candidates:
+        st.caption("Ranked from 5-minute candles: session move, 30/60 minute momentum, VWAP position, and live volume trend.")
+        breakout_cols = st.columns(5)
+        for index, candidate in enumerate(intraday_breakout_candidates, start=1):
+            day_return = float(candidate["day_return"])
+            with breakout_cols[index - 1]:
+                st.markdown(
+                    f"""
+                    <div class="flow-card">
+                        <div class="small-label">#{index} 5m Breakout</div>
+                        <h3 style="margin: 0.2rem 0 0.1rem 0;">{candidate["ticker"]}</h3>
+                        <div class="small-label">{candidate["themes"]}</div>
+                        <p style="font-size: 1.35rem; margin: 0.6rem 0 0.2rem 0;">{float(candidate["breakout_score"]):.1f}</p>
+                        <div class="small-label">5m breakout score</div>
+                        <div class="price-row">
+                            <span class="small-label">{fmt_price(float(candidate["session_open"]))} -> {fmt_price(float(candidate["last_price"]))}</span>
+                            <span class="{pct_color_class(day_return)}">{fmt_pct(day_return)}</span>
+                        </div>
+                        <div class="small-label">Session open -> latest</div>
                     </div>
-                    <div class="small-label">Open -> Current</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-    breakout_display = pd.DataFrame(breakout_candidates)
-    if not breakout_display.empty:
+                    """,
+                    unsafe_allow_html=True,
+                )
+        breakout_display = pd.DataFrame(intraday_breakout_candidates)
         breakout_columns = [
             "ticker",
             "themes",
-            "open_price",
+            "last_time",
+            "session_open",
             "last_price",
-            "open_to_current_pct",
+            "day_return",
+            "return_30m",
+            "return_60m",
+            "vwap_gap_pct",
+            "volume_trend",
+            "recent_dollar_volume_m",
             "breakout_score",
-            "flow_score",
-            "return_1d",
-            "return_5d",
-            "relative_5d",
-            "dollar_volume_trend",
-            "volume_zscore",
             "reason",
         ]
-        pct_columns = ["open_to_current_pct", "return_1d", "return_5d", "relative_5d", "dollar_volume_trend"]
-        score_columns = ["breakout_score", "flow_score", "volume_zscore"]
+        pct_columns = ["day_return", "return_30m", "return_60m", "vwap_gap_pct", "volume_trend"]
         breakout_styled = breakout_display[breakout_columns].style.format(
             {
-                "open_price": fmt_price,
+                "session_open": fmt_price,
                 "last_price": fmt_price,
+                "recent_dollar_volume_m": "${:,.0f}M",
+                "breakout_score": "{:.1f}",
                 **{column: fmt_pct for column in pct_columns},
-                **{column: "{:.1f}" for column in score_columns},
             }
         )
         breakout_styled = breakout_styled.map(
             lambda value: "color: #3fb950; font-weight: 700" if value >= 0 else "color: #f85149; font-weight: 700",
-            subset=["open_to_current_pct", "return_1d"],
+            subset=["day_return", "return_30m", "return_60m", "vwap_gap_pct"],
         )
         st.dataframe(
             breakout_styled,
             width="stretch",
             hide_index=True,
         )
+    else:
+        st.warning("5m individual-stock data is unavailable right now; showing daily breakout fallback.")
+        breakout_display = pd.DataFrame(daily_breakout_candidates)
+        if not breakout_display.empty:
+            st.dataframe(breakout_display, width="stretch", hide_index=True)
 
     st.subheader("Top 5 Flow Candidates")
     st.caption("Ranked by component money-flow score plus related theme strength. Research signal only, not financial advice.")

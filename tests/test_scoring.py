@@ -4,6 +4,7 @@ import unittest
 from us_stock_money.scoring import (
     broad_flow_score,
     build_breakout_candidates,
+    build_intraday_breakout_candidates,
     build_top_recommendations,
     classify_regime,
     flow_delta,
@@ -135,6 +136,44 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(candidates[0]["ticker"], "NOK")
         self.assertGreater(candidates[0]["breakout_score"], candidates[1]["breakout_score"])
         self.assertIn("open-to-current", candidates[0]["reason"])
+
+    def test_intraday_breakout_candidates_reward_5m_momentum(self):
+        rows = [
+            {
+                "ticker": "NOK",
+                "themes": "Optical Communication",
+                "last_time": "2026-01-02 10:30:00-05:00",
+                "session_open": 5.10,
+                "last_price": 5.55,
+                "day_return": 8.8,
+                "return_30m": 3.4,
+                "return_60m": 6.2,
+                "vwap": 5.40,
+                "vwap_gap_pct": 2.8,
+                "below_vwap": False,
+                "volume_trend": 240.0,
+                "recent_dollar_volume_m": 80.0,
+            },
+            {
+                "ticker": "NOW",
+                "themes": "AI Software / Data",
+                "last_time": "2026-01-02 10:30:00-05:00",
+                "session_open": 1000,
+                "last_price": 1002,
+                "day_return": 0.2,
+                "return_30m": 0.1,
+                "return_60m": 0.4,
+                "vwap": 1003,
+                "vwap_gap_pct": -0.1,
+                "below_vwap": True,
+                "volume_trend": 10.0,
+                "recent_dollar_volume_m": 40.0,
+            },
+        ]
+        candidates = build_intraday_breakout_candidates(rows, limit=2)
+        self.assertEqual(candidates[0]["ticker"], "NOK")
+        self.assertGreater(candidates[0]["breakout_score"], 90)
+        self.assertIn("last 30m momentum", candidates[0]["reason"])
 
     def test_flow_delta_uses_last_record_before_cutoff(self):
         now = datetime.datetime(2026, 5, 27, 12, 0)
