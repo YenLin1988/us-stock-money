@@ -21,8 +21,12 @@ def download_prices(period: str = "6mo", interval: str = "1d", tickers: list[str
     return data
 
 
-def download_intraday_prices(period: str = "5d", interval: str = "5m") -> pd.DataFrame:
-    return download_prices(period=period, interval=interval, tickers=list(INTRADAY_BENCHMARKS))
+def download_intraday_prices(
+    period: str = "5d",
+    interval: str = "5m",
+    tickers: list[str] | None = None,
+) -> pd.DataFrame:
+    return download_prices(period=period, interval=interval, tickers=tickers or list(INTRADAY_BENCHMARKS))
 
 
 def download_intraday_component_prices(period: str = "5d", interval: str = "5m") -> pd.DataFrame:
@@ -370,6 +374,43 @@ def build_intraday_component_table(data: pd.DataFrame) -> pd.DataFrame:
                 "below_vwap": below_vwap,
                 "volume_trend": volume_trend,
                 "recent_dollar_volume_m": recent_dollar_volume / 1_000_000,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def build_intraday_price_table(data: pd.DataFrame, tickers: list[str]) -> pd.DataFrame:
+    """Build latest 5m session open/current price rows for selected tickers."""
+    close = _field(data, "Close")
+    try:
+        open_prices = _field(data, "Open")
+    except KeyError:
+        open_prices = close
+
+    rows = []
+    for ticker in tickers:
+        if ticker not in close:
+            continue
+        prices = close[ticker].dropna()
+        if len(prices) < 2:
+            continue
+
+        latest_ts = prices.index[-1]
+        latest_session = _session_slice(prices, latest_ts)
+        open_series = open_prices[ticker].dropna() if ticker in open_prices else prices
+        latest_open_session = _session_slice(open_series, latest_ts)
+        if latest_session.empty or latest_open_session.empty:
+            continue
+
+        open_price = float(latest_open_session.iloc[0])
+        last_price = float(latest_session.iloc[-1])
+        rows.append(
+            {
+                "ticker": ticker,
+                "last_time": str(latest_ts),
+                "open_price": open_price,
+                "last_price": last_price,
+                "open_to_current_pct": ((last_price / open_price) - 1) * 100 if open_price else 0.0,
             }
         )
     return pd.DataFrame(rows)

@@ -10,6 +10,13 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from us_stock_money.alerts import evaluate_alerts
+from us_stock_money.congress_trades import DISPLAY_COLUMNS, download_congress_trades, filter_congress_trades
+from us_stock_money.insider_trades import (
+    DISPLAY_COLUMNS as INSIDER_DISPLAY_COLUMNS,
+    download_insider_trades,
+    filter_insider_trades,
+    summarize_insider_trades,
+)
 from us_stock_money.market_data import (
     benchmark_table,
     build_component_table,
@@ -103,6 +110,16 @@ def load_intraday_component_data(market_data_version: str) -> pd.DataFrame:
     return build_intraday_component_table(data)
 
 
+@st.cache_data(ttl=3600)
+def load_congress_trade_data() -> pd.DataFrame:
+    return download_congress_trades()
+
+
+@st.cache_data(ttl=3600)
+def load_insider_trade_data() -> pd.DataFrame:
+    return download_insider_trades()
+
+
 def fmt_pct(value: float) -> str:
     return f"{value:+.2f}%"
 
@@ -177,6 +194,35 @@ def configure_auto_refresh() -> None:
         )
 
 
+def fmt_dollar_compact(value: float) -> str:
+    absolute = abs(value)
+    if absolute >= 1_000_000:
+        return f"${value / 1_000_000:,.2f}M"
+    if absolute >= 1_000:
+        return f"${value / 1_000:,.1f}K"
+    return f"${value:,.0f}"
+
+
+def apply_intraday_prices(recommendations: list[dict[str, object]], intraday_prices: pd.DataFrame) -> list[dict[str, object]]:
+    intraday_by_ticker = {} if intraday_prices.empty else intraday_prices.set_index("ticker").to_dict("index")
+    enriched = []
+    for rec in recommendations:
+        item = dict(rec)
+        intraday = intraday_by_ticker.get(str(item.get("ticker", "")))
+        if intraday:
+            item["open_price"] = float(intraday.get("open_price", intraday.get("session_open", 0.0)))
+            item["last_price"] = float(intraday["last_price"])
+            item["open_to_current_pct"] = float(
+                intraday.get("open_to_current_pct", intraday.get("day_return", 0.0))
+            )
+            item["last_time"] = intraday["last_time"]
+            item["price_source"] = "5m"
+        else:
+            item["price_source"] = "1d"
+        enriched.append(item)
+    return enriched
+
+
 def main() -> None:
     configure_auto_refresh()
 
@@ -243,6 +289,7 @@ def main() -> None:
     recommendations = build_top_recommendations(component_df, theme_scores, limit=5)
     intraday_breakout_candidates = build_intraday_breakout_candidates(intraday_component_df, limit=5)
     daily_breakout_candidates = build_breakout_candidates(component_df, limit=5)
+    recommendations = apply_intraday_prices(recommendations, intraday_component_df)
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Regime", regime.name)
@@ -378,7 +425,7 @@ def main() -> None:
                         <span class="small-label">{fmt_price(float(rec["open_price"]))} -> {fmt_price(float(rec["last_price"]))}</span>
                         <span class="{pct_color_class(open_to_current_pct)}">{fmt_pct(open_to_current_pct)}</span>
                     </div>
-                    <div class="small-label">Open -> Current</div>
+                    <div class="small-label">{rec.get("price_source", "1d")} Open -> Current</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -391,6 +438,7 @@ def main() -> None:
             "open_price",
             "last_price",
             "open_to_current_pct",
+            "price_source",
             "composite_score",
             "flow_score",
             "theme_score",
@@ -419,6 +467,160 @@ def main() -> None:
             rec_styled,
             width="stretch",
             hide_index=True,
+        )
+
+    st.subheader("Congress Stock Trades")
+    st.caption(
+        "Recent STOCK Act disclosures from House and Senate filings. "
+        "Transactions may be reported up to 45 days after the trade date."
+    )
+    try:
+        congress_df = load_congress_trade_data()
+    except Exception as exc:
+        congress_df = pd.DataFrame()
+        st.warning(f"Congress trade data is temporarily unavailable: {exc}")
+
+    if not congress_df.empty:
+        filter_col1, filter_col2, filter_col3, filter_col4 = st.columns([0.8, 1.2, 1.2, 1])
+        with filter_col1:
+            congress_days = st.selectbox("Lookback", [30, 90, 180, 365], index=1, format_func=lambda value: f"{value} days")
+        with filter_col2:
+            congress_chambers = st.multiselect(
+                "Chamber",
+                sorted(congress_df["chamber"].dropna().unique()),
+                default=sorted(congress_df["chamber"].dropna().unique()),
+            )
+        with filter_col3:
+            congress_sides = st.multiselect(
+                "Transaction",
+                ["Purchase", "Sale", "Exchange", "Other"],
+                default=["Purchase", "Sale"],
+            )
+        with filter_col4:
+            congress_ticker = st.text_input("Ticker", placeholder="NVDA")
+
+        congress_display = filter_congress_trades(
+            congress_df,
+            days=congress_days,
+            chambers=congress_chambers,
+            sides=congress_sides,
+            ticker=congress_ticker,
+        )
+        congress_metric1, congress_metric2, congress_metric3, congress_metric4 = st.columns(4)
+        congress_metric1.metric("Disclosed Trades", len(congress_display))
+        congress_metric2.metric("Purchases", int((congress_display["trade_side"] == "Purchase").sum()))
+        congress_metric3.metric("Sales", int((congress_display["trade_side"] == "Sale").sum()))
+        latest_filing = congress_display["filing_date"].max()
+        congress_metric4.metric("Latest Filing", "N/A" if pd.isna(latest_filing) else latest_filing.strftime("%Y-%m-%d"))
+
+        if congress_display.empty:
+            st.info("No congressional trades match the selected filters.")
+        else:
+            congress_table = congress_display[DISPLAY_COLUMNS + ["trade_side"]].copy()
+            congress_table["transaction_date"] = congress_table["transaction_date"].dt.strftime("%Y-%m-%d")
+            congress_table["filing_date"] = congress_table["filing_date"].dt.strftime("%Y-%m-%d")
+            congress_table["days_to_file"] = congress_table["days_to_file"].map(
+                lambda value: "" if pd.isna(value) else f"{int(value)}"
+            )
+            congress_styled = congress_table.style.map(
+                lambda value: (
+                    "color: #3fb950; font-weight: 700"
+                    if value == "Purchase"
+                    else "color: #f85149; font-weight: 700"
+                    if value == "Sale"
+                    else ""
+                ),
+                subset=["trade_side"],
+            )
+            st.dataframe(
+                congress_styled,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "doc_url": st.column_config.LinkColumn("Official Filing", display_text="Open filing"),
+                    "trade_side": "Side",
+                },
+            )
+        st.caption(
+            "Source: normalized public STOCK Act filings from the House Clerk and Senate eFD. "
+            "Trade amounts are disclosed as ranges, not exact values."
+        )
+
+    st.subheader("Corporate Insider Trades")
+    st.caption(
+        "Latest SEC Form 4/4-A open-market transactions. Form 10-K filings are skipped. "
+        "Only transaction codes P (purchase) and S (sale) are counted; awards, option exercises, gifts, and tax withholding are excluded."
+    )
+    try:
+        insider_df = load_insider_trade_data()
+    except Exception as exc:
+        insider_df = pd.DataFrame()
+        st.warning(f"SEC insider trade data is temporarily unavailable: {exc}")
+
+    if not insider_df.empty:
+        insider_filter1, insider_filter2 = st.columns([1.2, 1])
+        with insider_filter1:
+            insider_sides = st.multiselect(
+                "Insider transaction",
+                ["Purchase", "Sale"],
+                default=["Purchase", "Sale"],
+            )
+        with insider_filter2:
+            insider_ticker = st.text_input("Insider ticker", placeholder="NVDA")
+
+        insider_display = filter_insider_trades(
+            insider_df,
+            sides=insider_sides,
+            ticker=insider_ticker,
+        )
+        insider_summary = summarize_insider_trades(insider_display)
+        insider_metric1, insider_metric2, insider_metric3, insider_metric4, insider_metric5 = st.columns(5)
+        insider_metric1.metric("Buy Shares", f"{insider_summary['purchase_shares']:,.0f}")
+        insider_metric2.metric("Sell Shares", f"{insider_summary['sale_shares']:,.0f}")
+        insider_metric3.metric("Buy Value", fmt_dollar_compact(insider_summary["purchase_value"]))
+        insider_metric4.metric("Sell Value", fmt_dollar_compact(insider_summary["sale_value"]))
+        insider_metric5.metric(
+            "Net Insider Value",
+            fmt_dollar_compact(insider_summary["net_value"]),
+            delta="Net buying" if insider_summary["net_value"] >= 0 else "Net selling",
+            delta_color="normal",
+        )
+
+        if insider_display.empty:
+            st.info("No open-market insider trades match the selected filters.")
+        else:
+            insider_table = insider_display[INSIDER_DISPLAY_COLUMNS].copy()
+            insider_table["transaction_date"] = insider_table["transaction_date"].dt.strftime("%Y-%m-%d")
+            insider_table["filing_time"] = insider_table["filing_time"].dt.strftime("%Y-%m-%d %H:%M UTC")
+            insider_styled = insider_table.style.format(
+                {
+                    "shares": "{:,.0f}",
+                    "price_per_share": "${:,.2f}",
+                    "estimated_value": "${:,.0f}",
+                    "shares_after": "{:,.0f}",
+                }
+            ).map(
+                lambda value: (
+                    "color: #3fb950; font-weight: 700"
+                    if value == "Purchase"
+                    else "color: #f85149; font-weight: 700"
+                    if value == "Sale"
+                    else ""
+                ),
+                subset=["trade_side"],
+            )
+            st.dataframe(
+                insider_styled,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "filing_url": st.column_config.LinkColumn("SEC Filing", display_text="Open filing"),
+                    "trade_side": "Side",
+                },
+            )
+        st.caption(
+            "Source: SEC EDGAR Form 4 filings. Values are estimated as reported shares multiplied by reported price per share. "
+            "The feed is cached for one hour and covers the latest SEC filings, not a fixed historical window."
         )
 
     st.subheader("Selected Watchlist Components")

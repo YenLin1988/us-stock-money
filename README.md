@@ -98,6 +98,30 @@ The dashboard also includes a free Yahoo Finance 5-minute intraday monitor for S
 
 This monitor uses `period="5d"` and `interval="5m"` with a 5-minute Streamlit cache. Yahoo intraday data can be delayed, incomplete, or temporarily rate-limited.
 
+## Congress Stock Trades
+
+The dashboard tracks recently disclosed congressional stock transactions collected from public House Clerk and Senate eFD STOCK Act filings:
+
+- filter by the last 30, 90, 180, or 365 days
+- filter by House or Senate and by purchase or sale
+- search by ticker
+- compare transaction dates with filing dates and disclosure delays
+- open the official filing document for each transaction
+
+Congressional trades are not real-time signals. Covered transactions may be disclosed up to 45 days after the trade date, and transaction values are reported as ranges.
+
+## Corporate Insider Trades
+
+The dashboard also reads the latest SEC Form 4 filings and summarizes open-market corporate insider activity:
+
+- total shares and estimated value bought and sold
+- net insider buying or selling value
+- company ticker, insider name, and executive/director role
+- transaction price, shares, and post-transaction ownership
+- direct link to the official SEC filing
+
+Only Form 4/4-A transaction codes `P` (open-market purchase) and `S` (open-market sale) are counted. Form 10-K filings, stock awards, option exercises, gifts, and tax withholding are excluded.
+
 ## Regimes
 
 | Regime | Condition | Meaning |
@@ -138,6 +162,8 @@ us-stock-money/
     model_config.py             # Theme baskets, sector reference universe, weights, thresholds
     scoring.py                  # Flow score, regime, decomposition helpers
     market_data.py              # Yahoo Finance data collection
+    congress_trades.py          # Congressional STOCK Act disclosure data
+    insider_trades.py           # SEC Form 4 open-market insider trades
     alerts.py                   # Deterministic alert rules
     storage.py                  # SQLite history store
   tests/                        # Unit tests for core logic

@@ -2,7 +2,7 @@ import unittest
 
 import pandas as pd
 
-from us_stock_money.market_data import build_component_table, build_intraday_component_table
+from us_stock_money.market_data import build_component_table, build_intraday_component_table, build_intraday_price_table
 
 
 class MarketDataTests(unittest.TestCase):
@@ -48,6 +48,33 @@ class MarketDataTests(unittest.TestCase):
         self.assertGreater(row["return_30m"], 0)
         self.assertGreater(row["vwap_gap_pct"], 0)
         self.assertGreater(row["volume_trend"], 0)
+
+    def test_intraday_price_table_uses_latest_session_open_and_current_price(self):
+        times = pd.to_datetime(
+            [
+                "2026-01-05 09:30",
+                "2026-01-05 09:35",
+                "2026-01-06 09:30",
+                "2026-01-06 09:35",
+                "2026-01-06 09:40",
+            ]
+        )
+        columns = pd.MultiIndex.from_product(
+            [["Open", "Close", "Volume"], ["MU"]],
+            names=["Price", "Ticker"],
+        )
+        data = pd.DataFrame(index=times, columns=columns, dtype=float)
+        data[("Open", "MU")] = [90.0, 91.0, 100.0, 103.0, 104.0]
+        data[("Close", "MU")] = [91.0, 92.0, 101.0, 104.0, 105.0]
+        data[("Volume", "MU")] = 1_000_000.0
+
+        rows = build_intraday_price_table(data, ["MU"])
+        row = rows.iloc[0]
+
+        self.assertEqual(row["ticker"], "MU")
+        self.assertEqual(row["open_price"], 100.0)
+        self.assertEqual(row["last_price"], 105.0)
+        self.assertAlmostEqual(row["open_to_current_pct"], 5.0)
 
 
 if __name__ == "__main__":
