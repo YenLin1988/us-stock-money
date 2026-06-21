@@ -159,6 +159,8 @@ The dashboard tracks recently disclosed congressional stock transactions collect
 - filter by the last 30, 90, 180, or 365 days
 - filter by House or Senate and by purchase or sale
 - search by ticker
+- review stock-level net buying and selling rankings before opening transaction detail
+- compare estimated buy, sale, and net values using disclosed range midpoints
 - compare transaction dates with filing dates and disclosure delays
 - open the official filing document for each transaction
 
@@ -170,6 +172,8 @@ The dashboard also reads the latest SEC Form 4 filings and summarizes open-marke
 
 - total shares and estimated value bought and sold
 - net insider buying or selling value
+- stock-level activity rankings with distinct insider counts and latest trade dates
+- a compact transaction view with value, role, price, and post-transaction holdings
 - company ticker, insider name, and executive/director role
 - transaction price, shares, and post-transaction ownership
 - direct link to the official SEC filing

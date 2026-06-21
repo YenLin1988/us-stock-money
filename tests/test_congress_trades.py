@@ -2,7 +2,12 @@ import unittest
 
 import pandas as pd
 
-from us_stock_money.congress_trades import filter_congress_trades, normalize_congress_trades
+from us_stock_money.congress_trades import (
+    aggregate_congress_by_ticker,
+    filter_congress_trades,
+    normalize_congress_trades,
+    summarize_congress_trades,
+)
 
 
 class CongressTradesTests(unittest.TestCase):
@@ -62,6 +67,17 @@ class CongressTradesTests(unittest.TestCase):
 
         self.assertEqual(len(filtered), 1)
         self.assertEqual(filtered.iloc[0]["filer_name"], "Jane Doe")
+
+    def test_summarizes_and_aggregates_estimated_range_midpoints(self):
+        frame = normalize_congress_trades(self.records)
+        summary = summarize_congress_trades(frame)
+        aggregate = aggregate_congress_by_ticker(frame)
+
+        self.assertEqual(summary["purchase_value"], 8000.5)
+        self.assertEqual(summary["sale_value"], 32500.5)
+        self.assertEqual(summary["net_value"], -24500.0)
+        self.assertEqual(aggregate.iloc[0]["ticker"], "MSFT")
+        self.assertEqual(aggregate.iloc[0]["signal"], "Net Selling")
 
 
 if __name__ == "__main__":

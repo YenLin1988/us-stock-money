@@ -12,9 +12,16 @@ from plotly.subplots import make_subplots
 
 from us_stock_money import scoring as scoring_module
 from us_stock_money.alerts import evaluate_alerts
-from us_stock_money.congress_trades import DISPLAY_COLUMNS, download_congress_trades, filter_congress_trades
+from us_stock_money.congress_trades import (
+    DISPLAY_COLUMNS,
+    aggregate_congress_by_ticker,
+    download_congress_trades,
+    filter_congress_trades,
+    summarize_congress_trades,
+)
 from us_stock_money.insider_trades import (
     DISPLAY_COLUMNS as INSIDER_DISPLAY_COLUMNS,
+    aggregate_insider_by_ticker,
     download_insider_trades,
     filter_insider_trades,
     summarize_insider_trades,
@@ -249,6 +256,59 @@ def fmt_dollar_compact(value: float) -> str:
     if absolute >= 1_000:
         return f"${value / 1_000:,.1f}K"
     return f"${value:,.0f}"
+
+
+def disclosure_style(value: object) -> str:
+    if value in {"Purchase", "Net Buying"}:
+        return "color: #3fb950; font-weight: 700"
+    if value in {"Sale", "Net Selling"}:
+        return "color: #f85149; font-weight: 700"
+    if value == "Mixed":
+        return "color: #d29922; font-weight: 700"
+    return ""
+
+
+def net_value_style(value: object) -> str:
+    if pd.isna(value):
+        return ""
+    return "color: #3fb950; font-weight: 700" if float(value) >= 0 else "color: #f85149; font-weight: 700"
+
+
+def render_disclosure_activity_chart(
+    frame: pd.DataFrame,
+    *,
+    value_column: str,
+    title: str,
+) -> None:
+    if frame.empty:
+        return
+    chart_data = (
+        frame.assign(_magnitude=frame[value_column].abs())
+        .nlargest(12, "_magnitude")
+        .drop(columns="_magnitude")
+    )
+    chart_data = chart_data.sort_values(value_column)
+    chart = px.bar(
+        chart_data,
+        x=value_column,
+        y="ticker",
+        orientation="h",
+        color=value_column,
+        color_continuous_scale=["#f85149", "#111820", "#3fb950"],
+        color_continuous_midpoint=0,
+        title=title,
+    )
+    chart.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        height=max(330, len(chart_data) * 34),
+        coloraxis_showscale=False,
+        xaxis_title="Net selling ← Estimated value → Net buying",
+        yaxis_title="",
+        margin={"l": 20, "r": 20, "t": 50, "b": 35},
+    )
+    st.plotly_chart(chart, width="stretch")
 
 
 def apply_intraday_prices(recommendations: list[dict[str, object]], intraday_prices: pd.DataFrame) -> list[dict[str, object]]:
@@ -748,51 +808,313 @@ def signals_page() -> None:
 def disclosures_page() -> None:
     render_page_header(
         "Disclosures",
-        "Congressional STOCK Act filings and SEC Form 4/4-A open-market insider transactions.",
+        "Readable stock-level summaries of congressional disclosures and SEC open-market insider transactions.",
     )
     congress_df, insider_df = load_disclosure_context()
 
-    st.subheader("Congress Stock Trades")
-    if congress_df.empty:
-        st.info("No congressional disclosure data is available.")
-    else:
-        filter1, filter2, filter3 = st.columns([0.8, 1.2, 1])
-        days = filter1.selectbox("Lookback", [30, 90, 180, 365], index=1, format_func=lambda value: f"{value} days")
-        sides = filter2.multiselect("Transaction", ["Purchase", "Sale", "Exchange", "Other"], default=["Purchase", "Sale"])
-        ticker = filter3.text_input("Congress ticker", placeholder="NVDA")
-        congress_display = filter_congress_trades(congress_df, days=days, sides=sides, ticker=ticker)
-        metrics = st.columns(3)
-        metrics[0].metric("Trades", len(congress_display))
-        metrics[1].metric("Purchases", int((congress_display["trade_side"] == "Purchase").sum()))
-        metrics[2].metric("Sales", int((congress_display["trade_side"] == "Sale").sum()))
-        st.dataframe(
-            congress_display[DISPLAY_COLUMNS + ["trade_side"]],
-            width="stretch",
-            hide_index=True,
-            column_config={"doc_url": st.column_config.LinkColumn("Official Filing", display_text="Open filing")},
+    congress_tab, insider_tab = st.tabs(["Congress", "Corporate Insiders"])
+    with congress_tab:
+        st.caption(
+            "STOCK Act transactions can be disclosed up to 45 days after trading. Estimated values below use "
+            "the midpoint of each publicly reported amount range."
         )
+        if congress_df.empty:
+            st.info("No congressional disclosure data is available.")
+        else:
+            filter1, filter2, filter3, filter4 = st.columns([0.8, 1.1, 1.2, 1])
+            days = filter1.selectbox(
+                "Lookback",
+                [30, 90, 180, 365],
+                index=1,
+                format_func=lambda value: f"{value} days",
+                key="congress_days",
+            )
+            chambers = filter2.multiselect(
+                "Chamber",
+                sorted(congress_df["chamber"].dropna().unique()),
+                default=sorted(congress_df["chamber"].dropna().unique()),
+                key="congress_chambers",
+            )
+            sides = filter3.multiselect(
+                "Transaction",
+                ["Purchase", "Sale", "Exchange", "Other"],
+                default=["Purchase", "Sale"],
+                key="congress_sides",
+            )
+            ticker = filter4.text_input("Ticker", placeholder="NVDA", key="congress_ticker")
+            congress_display = filter_congress_trades(
+                congress_df,
+                days=days,
+                chambers=chambers,
+                sides=sides,
+                ticker=ticker,
+            )
+            summary = summarize_congress_trades(congress_display)
+            metrics = st.columns(5)
+            metrics[0].metric("Transactions", int(summary["trades"]))
+            metrics[1].metric("Active Tickers", int(summary["tickers"]))
+            metrics[2].metric("Estimated Buys", fmt_dollar_compact(summary["purchase_value"]))
+            metrics[3].metric("Estimated Sales", fmt_dollar_compact(summary["sale_value"]))
+            metrics[4].metric(
+                "Estimated Net",
+                fmt_dollar_compact(summary["net_value"]),
+                f"{summary['net_value']:+,.0f}",
+                delta_color="normal",
+            )
 
-    st.subheader("Corporate Insider Trades")
-    if insider_df.empty:
-        st.info("No SEC insider disclosure data is available.")
-    else:
-        filter1, filter2 = st.columns([1.2, 1])
-        sides = filter1.multiselect("Insider transaction", ["Purchase", "Sale"], default=["Purchase", "Sale"])
-        ticker = filter2.text_input("Insider ticker", placeholder="MSFT")
-        insider_display = filter_insider_trades(insider_df, sides=sides, ticker=ticker)
-        summary = summarize_insider_trades(insider_display)
-        metrics = st.columns(5)
-        metrics[0].metric("Buy Shares", f"{summary['purchase_shares']:,.0f}")
-        metrics[1].metric("Sell Shares", f"{summary['sale_shares']:,.0f}")
-        metrics[2].metric("Buy Value", fmt_dollar_compact(summary["purchase_value"]))
-        metrics[3].metric("Sell Value", fmt_dollar_compact(summary["sale_value"]))
-        metrics[4].metric("Net Value", fmt_dollar_compact(summary["net_value"]))
-        st.dataframe(
-            insider_display[INSIDER_DISPLAY_COLUMNS],
-            width="stretch",
-            hide_index=True,
-            column_config={"filing_url": st.column_config.LinkColumn("SEC Filing", display_text="Open filing")},
+            if congress_display.empty:
+                st.info("No congressional trades match the selected filters.")
+            else:
+                view = st.segmented_control(
+                    "Congress view",
+                    ["By Stock", "Transactions"],
+                    default="By Stock",
+                    label_visibility="collapsed",
+                )
+                if view == "Transactions":
+                    detail = congress_display.copy()
+                    today = pd.Timestamp.now().normalize()
+                    detail["days_ago"] = (today - detail["transaction_date"].dt.normalize()).dt.days
+                    detail["filing_date"] = detail["filing_date"].dt.strftime("%Y-%m-%d")
+                    detail["transaction_date"] = detail["transaction_date"].dt.strftime("%Y-%m-%d")
+                    detail_columns = [
+                        "transaction_date",
+                        "days_ago",
+                        "ticker",
+                        "trade_side",
+                        "amount_range_label",
+                        "filer_name",
+                        "chamber",
+                        "party",
+                        "state",
+                        "filing_date",
+                        "days_to_file",
+                        "doc_url",
+                    ]
+                    detail_styled = detail[detail_columns].style.map(
+                        disclosure_style,
+                        subset=["trade_side"],
+                    )
+                    st.dataframe(
+                        detail_styled,
+                        width="stretch",
+                        hide_index=True,
+                        column_config={
+                            "transaction_date": "Trade Date",
+                            "days_ago": "Days Ago",
+                            "ticker": "Ticker",
+                            "trade_side": "Side",
+                            "amount_range_label": "Reported Amount",
+                            "filer_name": "Member",
+                            "chamber": "Chamber",
+                            "party": "Party",
+                            "state": "State",
+                            "filing_date": "Filed",
+                            "days_to_file": st.column_config.NumberColumn("Filing Delay", format="%d days"),
+                            "doc_url": st.column_config.LinkColumn("Source", display_text="Open filing"),
+                        },
+                    )
+                else:
+                    stock_summary = aggregate_congress_by_ticker(congress_display)
+                    render_disclosure_activity_chart(
+                        stock_summary,
+                        value_column="estimated_net_value",
+                        title="Congressional Net Activity by Stock",
+                    )
+                    stock_summary["analysis_url"] = stock_summary["ticker"].map(
+                        lambda value: f"/stock-analysis?ticker={value}" if value in ALL_TICKERS else None
+                    )
+                    stock_summary["latest_trade"] = stock_summary["latest_trade"].dt.strftime("%Y-%m-%d")
+                    stock_columns = [
+                        "ticker",
+                        "signal",
+                        "trade_count",
+                        "purchases",
+                        "sales",
+                        "estimated_buy_value",
+                        "estimated_sale_value",
+                        "estimated_net_value",
+                        "filer_count",
+                        "latest_trade",
+                        "analysis_url",
+                    ]
+                    stock_styled = stock_summary[stock_columns].style.format(
+                        {
+                            "estimated_buy_value": "${:,.0f}",
+                            "estimated_sale_value": "${:,.0f}",
+                            "estimated_net_value": "${:+,.0f}",
+                        }
+                    ).map(disclosure_style, subset=["signal"]).map(
+                        net_value_style,
+                        subset=["estimated_net_value"],
+                    )
+                    st.dataframe(
+                        stock_styled,
+                        width="stretch",
+                        hide_index=True,
+                        column_config={
+                            "ticker": "Ticker",
+                            "signal": "Activity",
+                            "trade_count": "Trades",
+                            "purchases": "Buys",
+                            "sales": "Sales",
+                            "estimated_buy_value": "Estimated Buys",
+                            "estimated_sale_value": "Estimated Sales",
+                            "estimated_net_value": "Estimated Net",
+                            "filer_count": "Members",
+                            "latest_trade": "Latest Trade",
+                            "analysis_url": st.column_config.LinkColumn("Chart", display_text="Open analysis"),
+                        },
+                    )
+
+    with insider_tab:
+        st.caption(
+            "Only SEC Form 4/4-A open-market purchase and sale codes are included. Awards, exercises, gifts, "
+            "tax withholding, and Form 10-K filings are excluded."
         )
+        if insider_df.empty:
+            st.info("No SEC insider disclosure data is available.")
+        else:
+            filter1, filter2, filter3 = st.columns([1.2, 1, 1])
+            sides = filter1.multiselect(
+                "Transaction",
+                ["Purchase", "Sale"],
+                default=["Purchase", "Sale"],
+                key="insider_sides",
+            )
+            ticker = filter2.text_input("Ticker", placeholder="MSFT", key="insider_ticker")
+            minimum_value = filter3.selectbox(
+                "Minimum Value",
+                [0, 10_000, 50_000, 100_000, 500_000, 1_000_000],
+                format_func=fmt_dollar_compact,
+                key="insider_minimum_value",
+            )
+            insider_display = filter_insider_trades(insider_df, sides=sides, ticker=ticker)
+            insider_display = insider_display[insider_display["estimated_value"] >= minimum_value].reset_index(drop=True)
+            summary = summarize_insider_trades(insider_display)
+            metrics = st.columns(5)
+            metrics[0].metric("Transactions", int(summary["trades"]))
+            metrics[1].metric("Active Tickers", int(summary["tickers"]))
+            metrics[2].metric("Buy Value", fmt_dollar_compact(summary["purchase_value"]))
+            metrics[3].metric("Sale Value", fmt_dollar_compact(summary["sale_value"]))
+            metrics[4].metric(
+                "Net Insider Value",
+                fmt_dollar_compact(summary["net_value"]),
+                f"{summary['net_value']:+,.0f}",
+                delta_color="normal",
+            )
+
+            if insider_display.empty:
+                st.info("No open-market insider trades match the selected filters.")
+            else:
+                view = st.segmented_control(
+                    "Insider view",
+                    ["By Stock", "Transactions"],
+                    default="By Stock",
+                    label_visibility="collapsed",
+                )
+                if view == "Transactions":
+                    detail = insider_display.copy()
+                    today = pd.Timestamp.now(tz="UTC").normalize()
+                    detail["days_ago"] = (
+                        today - detail["transaction_date"].dt.tz_localize("UTC").dt.normalize()
+                    ).dt.days
+                    detail["transaction_date"] = detail["transaction_date"].dt.strftime("%Y-%m-%d")
+                    detail_columns = [
+                        "transaction_date",
+                        "days_ago",
+                        "ticker",
+                        "trade_side",
+                        "estimated_value",
+                        "owner_name",
+                        "role",
+                        "shares",
+                        "price_per_share",
+                        "shares_after",
+                        "filing_url",
+                    ]
+                    detail_styled = detail[detail_columns].style.format(
+                        {
+                            "estimated_value": "${:,.0f}",
+                            "shares": "{:,.0f}",
+                            "price_per_share": "${:,.2f}",
+                            "shares_after": "{:,.0f}",
+                        }
+                    ).map(disclosure_style, subset=["trade_side"])
+                    st.dataframe(
+                        detail_styled,
+                        width="stretch",
+                        hide_index=True,
+                        column_config={
+                            "transaction_date": "Trade Date",
+                            "days_ago": "Days Ago",
+                            "ticker": "Ticker",
+                            "trade_side": "Side",
+                            "estimated_value": "Estimated Value",
+                            "owner_name": "Insider",
+                            "role": "Role",
+                            "shares": "Shares",
+                            "price_per_share": "Price",
+                            "shares_after": "Holdings After",
+                            "filing_url": st.column_config.LinkColumn("Source", display_text="SEC filing"),
+                        },
+                    )
+                else:
+                    stock_summary = aggregate_insider_by_ticker(insider_display)
+                    render_disclosure_activity_chart(
+                        stock_summary,
+                        value_column="net_value",
+                        title="Corporate Insider Net Activity by Stock",
+                    )
+                    stock_summary["analysis_url"] = stock_summary["ticker"].map(
+                        lambda value: f"/stock-analysis?ticker={value}" if value in ALL_TICKERS else None
+                    )
+                    stock_summary["latest_trade"] = stock_summary["latest_trade"].dt.strftime("%Y-%m-%d")
+                    stock_columns = [
+                        "ticker",
+                        "signal",
+                        "trade_count",
+                        "purchases",
+                        "sales",
+                        "buy_value",
+                        "sale_value",
+                        "net_value",
+                        "insider_count",
+                        "latest_trade",
+                        "analysis_url",
+                    ]
+                    stock_styled = stock_summary[stock_columns].style.format(
+                        {
+                            "buy_value": "${:,.0f}",
+                            "sale_value": "${:,.0f}",
+                            "net_value": "${:+,.0f}",
+                        }
+                    ).map(disclosure_style, subset=["signal"]).map(
+                        net_value_style,
+                        subset=["net_value"],
+                    )
+                    st.dataframe(
+                        stock_styled,
+                        width="stretch",
+                        hide_index=True,
+                        column_config={
+                            "ticker": "Ticker",
+                            "signal": "Activity",
+                            "trade_count": "Trades",
+                            "purchases": "Buys",
+                            "sales": "Sales",
+                            "buy_value": "Buy Value",
+                            "sale_value": "Sale Value",
+                            "net_value": "Net Value",
+                            "insider_count": "Insiders",
+                            "latest_trade": "Latest Trade",
+                            "analysis_url": st.column_config.LinkColumn("Chart", display_text="Open analysis"),
+                        },
+                    )
+
+    st.caption(
+        "Disclosure data is delayed and should be treated as supporting context, not a real-time trading signal or financial advice."
+    )
 
 
 def research_page() -> None:

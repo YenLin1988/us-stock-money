@@ -1,6 +1,7 @@
 import unittest
 
 from us_stock_money.insider_trades import (
+    aggregate_insider_by_ticker,
     filter_insider_trades,
     normalize_insider_trades,
     parse_form4_feed,
@@ -103,12 +104,16 @@ class InsiderTradesTests(unittest.TestCase):
 
         filtered = filter_insider_trades(frame, sides=["Purchase"], ticker="EX")
         summary = summarize_insider_trades(frame)
+        aggregate = aggregate_insider_by_ticker(frame)
 
         self.assertEqual(len(frame), 2)
         self.assertEqual(len(filtered), 1)
         self.assertEqual(summary["purchase_shares"], 100)
         self.assertEqual(summary["sale_shares"], 50)
         self.assertEqual(summary["net_value"], 500)
+        self.assertEqual(summary["tickers"], 2)
+        self.assertEqual(aggregate.iloc[0]["ticker"], "EXM")
+        self.assertEqual(aggregate.iloc[0]["signal"], "Net Buying")
 
 
 if __name__ == "__main__":
