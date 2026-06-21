@@ -13,6 +13,7 @@ The Streamlit app uses native multi-page navigation:
 | Decision Dashboard | Focused recommendations, risk watchlist, and weekly money-flow direction |
 | Recommendations | Integrated rankings with factor-level scores |
 | Signals | Market timing, 5-minute breakouts, and exit signals |
+| Stock Analysis | MA60 breakdown alerts and per-stock daily technical charts |
 | Disclosures | Congressional STOCK Act and SEC Form 4 transactions |
 | Market Research | Weekly money-flow trends, theme rotation, watchlist, sectors, benchmarks, and component tables |
 | Full Dashboard | Complete legacy dashboard and every monitoring section |
@@ -127,6 +128,19 @@ Before showing candidate stocks, the dashboard checks whether broad-market condi
 - **Wait for Confirmation**: conditions are mixed and the dashboard waits for clearer confirmation.
 
 This signal is a market-regime filter, not personal financial advice.
+
+## Stock Technical Analysis
+
+The Stock Analysis page scans the tracked universe for quarterly-line risk:
+
+- flags stocks that crossed below MA60 during the latest five trading sessions
+- separates new breakdowns from stocks that remain below MA60
+- shows distance to MA60 plus 5-day and 20-day returns
+- links each alert to a per-stock daily candlestick chart
+- overlays MA5, MA20 monthly line, and MA60 quarterly line
+- includes volume, RSI (14), MACD (12/26/9), 20-day annualized volatility, 52-week range, and drawdown
+
+Daily prices come from Yahoo Finance and can be delayed, incomplete, or adjusted after corporate actions.
 
 ## 5m Intraday Market Monitor
 

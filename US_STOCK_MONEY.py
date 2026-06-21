@@ -8,6 +8,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
+from plotly.subplots import make_subplots
 
 from us_stock_money import scoring as scoring_module
 from us_stock_money.alerts import evaluate_alerts
@@ -30,7 +31,7 @@ from us_stock_money.market_data import (
     download_intraday_prices,
     download_prices,
 )
-from us_stock_money.model_config import MARKET_DATA_VERSION, WATCHLIST_TICKERS
+from us_stock_money.model_config import ALL_TICKERS, MARKET_DATA_VERSION, WATCHLIST_TICKERS
 from us_stock_money.scoring import (
     broad_flow_score,
     build_breakout_candidates,
@@ -43,6 +44,7 @@ from us_stock_money.scoring import (
     theme_group_scores,
 )
 from us_stock_money.storage import HistoryStore
+from us_stock_money.technical_analysis import build_ma60_alerts, build_stock_detail, stock_snapshot
 
 
 st.set_page_config(page_title="US STOCK MONEY", page_icon="$", layout="wide")
@@ -140,6 +142,11 @@ def load_intraday_data(market_data_version: str) -> pd.DataFrame:
 def load_intraday_component_data(market_data_version: str) -> pd.DataFrame:
     data = download_intraday_component_prices(period="5d", interval="5m")
     return build_intraday_component_table(data)
+
+
+@st.cache_data(ttl=900)
+def load_technical_data(market_data_version: str) -> pd.DataFrame:
+    return download_prices(period="1y", interval="1d")
 
 
 @st.cache_data(ttl=3600)
@@ -947,6 +954,276 @@ def research_page() -> None:
         st.dataframe(context["bench_df"], width="stretch", hide_index=True)
 
 
+def stock_analysis_page() -> None:
+    render_page_header(
+        "Stock Technical Analysis",
+        "MA60 breakdown alerts and daily price analysis with MA5, MA20, MA60, volume, RSI, and MACD.",
+    )
+    try:
+        technical_data = load_technical_data(MARKET_DATA_VERSION)
+    except Exception as exc:
+        st.error(f"Could not load technical data: {exc}")
+        return
+
+    alerts = build_ma60_alerts(technical_data, tickers=ALL_TICKERS, recent_sessions=5)
+    if alerts.empty:
+        st.info("Technical alerts are unavailable because there is not enough daily price history.")
+        return
+
+    st.subheader("MA60 Risk Alerts")
+    st.caption(
+        "Quarterly line means the 60-session moving average. A new breakdown means price crossed below MA60 "
+        "during the latest five trading sessions and remains below it."
+    )
+    dangerous = alerts[alerts["below_ma60"]]
+    new_breakdowns = alerts[alerts["recent_breakdown"] & alerts["below_ma60"]]
+    weakest = alerts.iloc[alerts["distance_to_ma60_pct"].argmin()]
+    summary = st.columns(4)
+    summary[0].metric("New MA60 Breakdowns", len(new_breakdowns))
+    summary[1].metric("Below MA60", len(dangerous))
+    summary[2].metric("Universe", len(alerts))
+    summary[3].metric(
+        "Weakest vs MA60",
+        str(weakest["ticker"]),
+        fmt_pct(float(weakest["distance_to_ma60_pct"])),
+        delta_color="normal",
+    )
+
+    filter_col, search_col = st.columns([1.6, 1])
+    statuses = filter_col.multiselect(
+        "Alert status",
+        options=["New Breakdown", "Below MA60", "Above MA60"],
+        default=["New Breakdown", "Below MA60"],
+    )
+    ticker_search = search_col.text_input("Ticker search", placeholder="NVDA").strip().upper()
+    alert_display = alerts[alerts["status"].isin(statuses)].copy() if statuses else alerts.iloc[0:0].copy()
+    if ticker_search:
+        alert_display = alert_display[alert_display["ticker"].str.contains(ticker_search, regex=False)]
+    alert_display["analysis_url"] = alert_display["ticker"].map(lambda ticker: f"/stock-analysis?ticker={ticker}")
+    alert_display["cross_date"] = pd.to_datetime(alert_display["cross_date"]).dt.strftime("%Y-%m-%d").fillna("-")
+    alert_columns = [
+        "ticker",
+        "status",
+        "last_price",
+        "ma20",
+        "ma60",
+        "distance_to_ma60_pct",
+        "return_5d",
+        "return_20d",
+        "cross_date",
+        "analysis_url",
+    ]
+    alert_styled = alert_display[alert_columns].style.format(
+        {
+            "last_price": "${:,.2f}",
+            "ma20": "${:,.2f}",
+            "ma60": "${:,.2f}",
+            "distance_to_ma60_pct": "{:+.2f}%",
+            "return_5d": "{:+.2f}%",
+            "return_20d": "{:+.2f}%",
+        },
+        na_rep="-",
+    ).map(
+        lambda value: (
+            "color: #f85149; font-weight: 700"
+            if value in {"New Breakdown", "Below MA60"}
+            else "color: #3fb950; font-weight: 700"
+        ),
+        subset=["status"],
+    ).map(
+        lambda value: (
+            "color: #3fb950; font-weight: 700"
+            if pd.notna(value) and float(value) >= 0
+            else "color: #f85149; font-weight: 700"
+            if pd.notna(value)
+            else ""
+        ),
+        subset=["distance_to_ma60_pct", "return_5d", "return_20d"],
+    )
+    st.dataframe(
+        alert_styled,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "ticker": "Ticker",
+            "status": "MA60 Status",
+            "last_price": "Last",
+            "ma20": "MA20",
+            "ma60": "MA60",
+            "distance_to_ma60_pct": "vs MA60",
+            "return_5d": "5D",
+            "return_20d": "20D",
+            "cross_date": "Last Breakdown",
+            "analysis_url": st.column_config.LinkColumn("Detail", display_text="Open analysis"),
+        },
+    )
+
+    st.divider()
+    query_ticker = st.query_params.get("ticker", "")
+    if isinstance(query_ticker, list):
+        query_ticker = query_ticker[0] if query_ticker else ""
+    requested_ticker = str(query_ticker).upper()
+    default_ticker = requested_ticker if requested_ticker in ALL_TICKERS else "NVDA"
+    ticker_col, range_col = st.columns([1, 1.5])
+    selected_ticker = ticker_col.selectbox(
+        "Stock",
+        options=ALL_TICKERS,
+        index=ALL_TICKERS.index(default_ticker),
+    )
+    history_window = range_col.segmented_control(
+        "Chart range",
+        options=["3M", "6M", "1Y"],
+        default="6M",
+    )
+    if requested_ticker != selected_ticker:
+        st.query_params["ticker"] = selected_ticker
+
+    detail = build_stock_detail(technical_data, selected_ticker)
+    snapshot = stock_snapshot(detail)
+    if detail.empty or not snapshot:
+        st.warning(f"No daily technical data is available for {selected_ticker}.")
+        return
+
+    selected_alert = alerts[alerts["ticker"] == selected_ticker]
+    alert_status = str(selected_alert.iloc[0]["status"]) if not selected_alert.empty else "Unavailable"
+    status_color = "#f85149" if alert_status in {"New Breakdown", "Below MA60"} else "#3fb950"
+    st.markdown(
+        f"### {selected_ticker} <span style=\"color:{status_color}; font-size:1rem;\">{alert_status}</span>",
+        unsafe_allow_html=True,
+    )
+    metrics = st.columns(6)
+    metrics[0].metric("Last Price", fmt_price(snapshot["last_price"]), fmt_pct(snapshot["daily_return"]))
+    metrics[1].metric("vs MA20", fmt_pct(snapshot["ma20_gap"]))
+    metrics[2].metric("vs MA60", fmt_pct(snapshot["ma60_gap"]))
+    metrics[3].metric("RSI (14)", f"{snapshot['rsi14']:.1f}")
+    metrics[4].metric("20D Volatility", f"{snapshot['volatility_20d']:.1f}%")
+    metrics[5].metric("52W Drawdown", f"{snapshot['max_drawdown_52w']:.1f}%")
+    st.caption(
+        f"52-week range: {fmt_price(snapshot['low_52w'])} - {fmt_price(snapshot['high_52w'])}. "
+        "MA5 is the short-term line, MA20 is the monthly line, and MA60 is the quarterly line."
+    )
+
+    sessions = {"3M": 66, "6M": 132, "1Y": 252}
+    chart_data = detail.tail(sessions.get(str(history_window), 132))
+    price_chart = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.04,
+        row_heights=[0.76, 0.24],
+    )
+    if {"open", "high", "low", "close"}.issubset(chart_data.columns):
+        price_chart.add_trace(
+            go.Candlestick(
+                x=chart_data.index,
+                open=chart_data["open"],
+                high=chart_data["high"],
+                low=chart_data["low"],
+                close=chart_data["close"],
+                name="Daily",
+                increasing_line_color="#3fb950",
+                decreasing_line_color="#f85149",
+            ),
+            row=1,
+            col=1,
+        )
+    else:
+        price_chart.add_trace(
+            go.Scatter(x=chart_data.index, y=chart_data["close"], name="Close", line_color="#e6edf3"),
+            row=1,
+            col=1,
+        )
+    for column, label, color in [
+        ("ma5", "MA5", "#58a6ff"),
+        ("ma20", "MA20", "#d29922"),
+        ("ma60", "MA60", "#bc8cff"),
+    ]:
+        price_chart.add_trace(
+            go.Scatter(x=chart_data.index, y=chart_data[column], name=label, line={"color": color, "width": 1.6}),
+            row=1,
+            col=1,
+        )
+    volume_colors = ["#3fb950" if close >= open_price else "#f85149" for close, open_price in zip(
+        chart_data["close"],
+        chart_data.get("open", chart_data["close"]),
+        strict=False,
+    )]
+    price_chart.add_trace(
+        go.Bar(x=chart_data.index, y=chart_data.get("volume"), name="Volume", marker_color=volume_colors),
+        row=2,
+        col=1,
+    )
+    price_chart.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        height=650,
+        margin={"l": 20, "r": 20, "t": 35, "b": 20},
+        xaxis_rangeslider_visible=False,
+        legend={"orientation": "h", "y": 1.02, "x": 0},
+        hovermode="x unified",
+    )
+    price_chart.update_yaxes(title_text="Price", row=1, col=1)
+    price_chart.update_yaxes(title_text="Volume", row=2, col=1)
+    st.plotly_chart(price_chart, width="stretch")
+
+    rsi_col, macd_col = st.columns(2)
+    with rsi_col:
+        rsi_chart = go.Figure(go.Scatter(
+            x=chart_data.index,
+            y=chart_data["rsi14"],
+            line_color="#58a6ff",
+            name="RSI (14)",
+        ))
+        rsi_chart.add_hline(y=70, line_dash="dash", line_color="#f85149")
+        rsi_chart.add_hline(y=30, line_dash="dash", line_color="#3fb950")
+        rsi_chart.update_layout(
+            title="RSI (14)",
+            template="plotly_dark",
+            paper_bgcolor="#0b0f14",
+            plot_bgcolor="#0b0f14",
+            height=300,
+            yaxis_range=[0, 100],
+            margin={"l": 20, "r": 20, "t": 45, "b": 20},
+        )
+        st.plotly_chart(rsi_chart, width="stretch")
+    with macd_col:
+        histogram_colors = chart_data["macd_histogram"].map(lambda value: "#3fb950" if value >= 0 else "#f85149")
+        macd_chart = go.Figure()
+        macd_chart.add_trace(go.Bar(
+            x=chart_data.index,
+            y=chart_data["macd_histogram"],
+            marker_color=histogram_colors,
+            name="Histogram",
+        ))
+        macd_chart.add_trace(go.Scatter(
+            x=chart_data.index,
+            y=chart_data["macd"],
+            line_color="#58a6ff",
+            name="MACD",
+        ))
+        macd_chart.add_trace(go.Scatter(
+            x=chart_data.index,
+            y=chart_data["macd_signal"],
+            line_color="#d29922",
+            name="Signal",
+        ))
+        macd_chart.update_layout(
+            title="MACD (12, 26, 9)",
+            template="plotly_dark",
+            paper_bgcolor="#0b0f14",
+            plot_bgcolor="#0b0f14",
+            height=300,
+            margin={"l": 20, "r": 20, "t": 45, "b": 20},
+        )
+        st.plotly_chart(macd_chart, width="stretch")
+
+    st.caption(
+        "Technical indicators use adjusted Yahoo Finance daily prices and may be delayed or incomplete. "
+        "This is a research alert, not financial advice."
+    )
+
+
 def main() -> None:
     configure_auto_refresh()
 
@@ -1566,6 +1843,7 @@ if __name__ == "__main__":
                 st.Page(signals_page, title="Signals", url_path="signals"),
             ],
             "Research": [
+                st.Page(stock_analysis_page, title="Stock Analysis", url_path="stock-analysis"),
                 st.Page(disclosures_page, title="Disclosures", url_path="disclosures"),
                 st.Page(research_page, title="Market Research", url_path="research"),
                 st.Page(main, title="Full Dashboard", url_path="full-dashboard"),
