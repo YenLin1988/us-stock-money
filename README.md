@@ -10,11 +10,12 @@ The Streamlit app uses native multi-page navigation:
 
 | Page | Purpose |
 |---|---|
-| Overview | Complete dashboard and all monitoring sections |
+| Decision Dashboard | Focused recommendations, risk watchlist, and weekly money-flow direction |
 | Recommendations | Integrated rankings with factor-level scores |
 | Signals | Market timing, 5-minute breakouts, and exit signals |
 | Disclosures | Congressional STOCK Act and SEC Form 4 transactions |
 | Market Research | Weekly money-flow trends, theme rotation, watchlist, sectors, benchmarks, and component tables |
+| Full Dashboard | Complete legacy dashboard and every monitoring section |
 
 ## What It Tracks Now
 

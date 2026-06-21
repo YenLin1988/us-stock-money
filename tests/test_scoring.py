@@ -6,6 +6,7 @@ from us_stock_money.scoring import (
     build_breakout_candidates,
     build_integrated_recommendations,
     build_intraday_breakout_candidates,
+    build_risk_watchlist,
     build_top_recommendations,
     classify_regime,
     flow_delta,
@@ -180,6 +181,36 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(recommendations[0]["insider_buys"], 1)
         self.assertEqual(recommendations[1]["exit_signal"], "Exit")
         self.assertIn("Congress 1B/0S", recommendations[0]["reason"])
+
+    def test_risk_watchlist_prioritizes_exit_and_weak_factors(self):
+        rows = [
+            {
+                "ticker": "SAFE",
+                "integrated_score": 82,
+                "flow_score": 85,
+                "momentum_score": 80,
+                "intraday_score": 88,
+                "insider_score": 50,
+                "congress_score": 50,
+                "exit_signal": "Hold",
+            },
+            {
+                "ticker": "RISK",
+                "integrated_score": 35,
+                "flow_score": 30,
+                "momentum_score": 25,
+                "intraday_score": 15,
+                "insider_score": 20,
+                "congress_score": 30,
+                "exit_signal": "Exit",
+            },
+        ]
+
+        risks = build_risk_watchlist(rows, limit=2)
+
+        self.assertEqual(risks[0]["ticker"], "RISK")
+        self.assertEqual(risks[0]["risk_level"], "Avoid")
+        self.assertIn("5m signal is Exit", risks[0]["risk_reason"])
 
     def test_breakout_candidates_reward_single_stock_surge(self):
         rows = [

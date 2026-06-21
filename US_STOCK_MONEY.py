@@ -88,6 +88,28 @@ st.markdown(
     .exit-exit { color: #f85149; background: rgba(248, 81, 73, 0.12); }
     .positive-pct { color: #3fb950; font-weight: 700; }
     .negative-pct { color: #f85149; font-weight: 700; }
+    .decision-banner {
+        border-left: 4px solid #58a6ff;
+        padding: 16px 20px;
+        margin: 0.5rem 0 1.25rem 0;
+        background: #111820;
+    }
+    .decision-positive { border-left-color: #3fb950; }
+    .decision-warning { border-left-color: #d29922; }
+    .decision-danger { border-left-color: #f85149; }
+    .decision-title { font-size: 1.05rem; font-weight: 700; color: #f0f6fc; }
+    .decision-copy { color: #b1bac4; margin-top: 4px; }
+    .recommend-card, .risk-card {
+        min-height: 225px;
+        border: 1px solid #30363d;
+        border-radius: 8px;
+        padding: 16px;
+        background: #111820;
+    }
+    .recommend-card { border-top: 3px solid #3fb950; }
+    .risk-card { border-top: 3px solid #f85149; }
+    .card-score { font-size: 1.7rem; font-weight: 700; color: #f0f6fc; margin: 0.55rem 0 0; }
+    .card-reason { color: #b1bac4; font-size: 0.86rem; margin-top: 0.75rem; line-height: 1.4; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -270,6 +292,22 @@ def build_integrated_recommendations(*args, **kwargs) -> list[dict[str, object]]
     ]
 
 
+def build_risk_watchlist(integrated_rows, limit: int = 5) -> list[dict[str, object]]:
+    builder = getattr(scoring_module, "build_risk_watchlist", None)
+    if builder is not None:
+        return builder(integrated_rows, limit=limit)
+    fallback = sorted(integrated_rows, key=lambda item: float(item.get("integrated_score", 50.0)))[:limit]
+    return [
+        {
+            **item,
+            "risk_score": 100.0 - float(item.get("integrated_score", 50.0)),
+            "risk_level": "Watch",
+            "risk_reason": "Integrated score is relatively weak.",
+        }
+        for item in fallback
+    ]
+
+
 def render_page_header(title: str, caption: str) -> None:
     configure_auto_refresh()
     st.title(title)
@@ -330,6 +368,215 @@ def load_disclosure_context() -> tuple[pd.DataFrame, pd.DataFrame]:
         st.warning(f"SEC insider trade data is temporarily unavailable: {exc}")
         insider_df = pd.DataFrame()
     return congress_df, insider_df
+
+
+def decision_dashboard_page() -> None:
+    render_page_header(
+        "US STOCK MONEY",
+        "A focused decision dashboard for recommendations, capital flow, and stocks that currently deserve caution.",
+    )
+    context = load_market_page_context()
+    if context is None:
+        return
+    congress_df, insider_df = load_disclosure_context()
+    recent_congress_df = filter_congress_trades(congress_df, days=90) if not congress_df.empty else congress_df
+    all_candidates = build_integrated_recommendations(
+        context["component_df"],
+        context["theme_scores"],
+        context["intraday_component_df"],
+        recent_congress_df,
+        insider_df,
+        market_score=context["timing_signal"].score,
+        limit=len(context["component_df"]),
+    )
+    recommended = [
+        candidate
+        for candidate in all_candidates
+        if candidate["rating"] in {"High Conviction", "Positive"}
+        and candidate["exit_signal"] not in {"Trim", "Exit"}
+    ][:5]
+    if len(recommended) < 3:
+        recommended = [
+            candidate for candidate in all_candidates if candidate["exit_signal"] not in {"Trim", "Exit"}
+        ][:5]
+    risks = build_risk_watchlist(all_candidates, limit=5)
+
+    timing_signal = context["timing_signal"]
+    banner_class = (
+        "decision-danger"
+        if timing_signal.status == "stand_aside"
+        else "decision-positive"
+        if timing_signal.status == "recovery_confirmed"
+        else "decision-warning"
+    )
+    st.markdown(
+        f"""
+        <div class="decision-banner {banner_class}">
+            <div class="decision-title">{timing_signal.title}</div>
+            <div class="decision-copy">{timing_signal.message}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    metric1, metric2, metric3, metric4 = st.columns(4)
+    metric1.metric("Market Timing", f"{timing_signal.score:.0f}/100")
+    metric2.metric("Broad Money Flow", f"{context['broad']:.1f}/100")
+    metric3.metric("Positive Candidates", len(recommended))
+    metric4.metric("High-Risk Flags", sum(item["risk_level"] in {"Avoid", "High Risk"} for item in risks))
+
+    st.subheader("Recommended Now")
+    st.caption("Candidates with supportive flow and momentum, without an active 5m Trim or Exit signal.")
+    if recommended:
+        recommendation_cols = st.columns(min(3, len(recommended)))
+        for index, candidate in enumerate(recommended[:3], start=1):
+            with recommendation_cols[index - 1]:
+                st.markdown(
+                    f"""
+                    <div class="recommend-card">
+                        <div class="small-label">#{index} {candidate["rating"]}</div>
+                        <h2 style="margin: 0.25rem 0 0;">{candidate["ticker"]}</h2>
+                        <div class="small-label">{candidate["themes"]}</div>
+                        <div class="card-score">{float(candidate["integrated_score"]):.1f}</div>
+                        <div class="price-row">
+                            <span class="small-label">{fmt_price(float(candidate["last_price"]))}</span>
+                            <span class="{pct_color_class(float(candidate["open_to_current_pct"]))}">{fmt_pct(float(candidate["open_to_current_pct"]))}</span>
+                        </div>
+                        <div class="card-reason">{candidate["reason"]}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+        with st.expander("See recommendation factor details"):
+            recommendation_df = pd.DataFrame(recommended)
+            st.dataframe(
+                recommendation_df[
+                    [
+                        "ticker",
+                        "integrated_score",
+                        "rating",
+                        "flow_score",
+                        "theme_score",
+                        "momentum_score",
+                        "intraday_score",
+                        "congress_score",
+                        "insider_score",
+                        "exit_signal",
+                        "reason",
+                    ]
+                ].style.format(
+                    {
+                        "integrated_score": "{:.1f}",
+                        "flow_score": "{:.1f}",
+                        "theme_score": "{:.1f}",
+                        "momentum_score": "{:.1f}",
+                        "intraday_score": "{:.1f}",
+                        "congress_score": "{:.1f}",
+                        "insider_score": "{:.1f}",
+                    }
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+    else:
+        st.warning("No stock currently passes the recommendation and risk filters.")
+
+    st.subheader("Avoid or Reduce Risk")
+    st.caption("Stocks with weak combined factors, active Trim/Exit signals, or disclosure selling pressure.")
+    if risks:
+        risk_cols = st.columns(min(3, len(risks)))
+        for index, candidate in enumerate(risks[:3]):
+            with risk_cols[index]:
+                st.markdown(
+                    f"""
+                    <div class="risk-card">
+                        <div class="small-label">{candidate["risk_level"]}</div>
+                        <h2 style="margin: 0.25rem 0 0;">{candidate["ticker"]}</h2>
+                        <div class="small-label">{candidate.get("themes", "")}</div>
+                        <div class="card-score">{float(candidate["risk_score"]):.1f}</div>
+                        <div class="small-label">Risk score · 5m {candidate["exit_signal"]}</div>
+                        <div class="card-reason">{candidate["risk_reason"]}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+        with st.expander("See full risk watchlist"):
+            risk_df = pd.DataFrame(risks)
+            st.dataframe(
+                risk_df[
+                    [
+                        "ticker",
+                        "risk_score",
+                        "risk_level",
+                        "integrated_score",
+                        "flow_score",
+                        "momentum_score",
+                        "intraday_score",
+                        "exit_signal",
+                        "risk_reason",
+                    ]
+                ].style.format(
+                    {
+                        "risk_score": "{:.1f}",
+                        "integrated_score": "{:.1f}",
+                        "flow_score": "{:.1f}",
+                        "momentum_score": "{:.1f}",
+                        "intraday_score": "{:.1f}",
+                    }
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+    else:
+        st.success("No high-risk stocks were identified in the current universe.")
+
+    st.subheader("Where Money Is Moving This Week")
+    weekly_df = context["weekly_theme_df"]
+    if weekly_df.empty:
+        st.info("Weekly money-flow data is unavailable.")
+    else:
+        latest_week = weekly_df["week"].max()
+        latest = weekly_df[weekly_df["week"] == latest_week].sort_values("net_flow")
+        flow_chart = px.bar(
+            latest,
+            x="net_flow",
+            y="theme",
+            orientation="h",
+            color="net_flow",
+            color_continuous_scale=["#f85149", "#111820", "#3fb950"],
+            color_continuous_midpoint=0,
+            hover_data=["weekly_return", "relative_return", "volume_trend"],
+            title=f"Weekly Theme Flow · Week Ending {latest_week:%Y-%m-%d}",
+        )
+        flow_chart.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="#0b0f14",
+            plot_bgcolor="#0b0f14",
+            height=520,
+            coloraxis_showscale=False,
+            xaxis_title="Outflow ← Net Flow → Inflow",
+            yaxis_title="",
+        )
+        st.plotly_chart(flow_chart, width="stretch")
+        inflow, outflow = st.columns(2)
+        with inflow:
+            st.markdown("**Strongest inflows**")
+            st.dataframe(
+                latest.nlargest(5, "net_flow")[["theme", "net_flow", "weekly_return"]].style.format(
+                    {"net_flow": "{:+.1f}", "weekly_return": "{:+.2f}%"}
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+        with outflow:
+            st.markdown("**Strongest outflows**")
+            st.dataframe(
+                latest.nsmallest(5, "net_flow")[["theme", "net_flow", "weekly_return"]].style.format(
+                    {"net_flow": "{:+.1f}", "weekly_return": "{:+.2f}%"}
+                ),
+                width="stretch",
+                hide_index=True,
+            )
 
 
 def recommendations_page() -> None:
@@ -1314,13 +1561,14 @@ if __name__ == "__main__":
     navigation = st.navigation(
         {
             "Dashboard": [
-                st.Page(main, title="Overview", url_path="overview", default=True),
+                st.Page(decision_dashboard_page, title="Decision Dashboard", url_path="overview", default=True),
                 st.Page(recommendations_page, title="Recommendations", url_path="recommendations"),
                 st.Page(signals_page, title="Signals", url_path="signals"),
             ],
             "Research": [
                 st.Page(disclosures_page, title="Disclosures", url_path="disclosures"),
                 st.Page(research_page, title="Market Research", url_path="research"),
+                st.Page(main, title="Full Dashboard", url_path="full-dashboard"),
             ],
         },
         position="sidebar",

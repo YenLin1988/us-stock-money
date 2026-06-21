@@ -216,6 +216,61 @@ def integrated_recommendation_reason(
     return "; ".join(reasons) + "."
 
 
+def build_risk_watchlist(integrated_rows, limit: int = 5) -> list[dict[str, object]]:
+    """Rank stocks that combine weak factors with active intraday risk signals."""
+    risks = []
+    for row in _iter_records(integrated_rows):
+        exit_signal = str(row.get("exit_signal", "Watch"))
+        integrated_score = float(row.get("integrated_score", 50.0))
+        flow_score = float(row.get("flow_score", 50.0))
+        momentum_score = float(row.get("momentum_score", 50.0))
+        intraday_score = float(row.get("intraday_score", 50.0))
+        insider_score = float(row.get("insider_score", 50.0))
+        congress_score = float(row.get("congress_score", 50.0))
+        signal_penalty = {"Exit": 25.0, "Trim": 12.0, "Watch": 3.0, "Hold": 0.0}.get(exit_signal, 3.0)
+        risk_score = (
+            (100.0 - integrated_score) * 0.55
+            + (100.0 - flow_score) * 0.15
+            + (100.0 - momentum_score) * 0.10
+            + (100.0 - intraday_score) * 0.10
+            + (100.0 - insider_score) * 0.05
+            + (100.0 - congress_score) * 0.05
+            + signal_penalty
+        )
+        risk_score = min(100.0, max(0.0, risk_score))
+        risk_level = (
+            "Avoid"
+            if risk_score >= 70
+            else "High Risk"
+            if risk_score >= 55
+            else "Watch"
+            if risk_score >= 40
+            else "Normal"
+        )
+        reasons = []
+        if exit_signal in {"Exit", "Trim"}:
+            reasons.append(f"5m signal is {exit_signal}")
+        if flow_score < 45:
+            reasons.append(f"weak flow {flow_score:.0f}")
+        if momentum_score < 40:
+            reasons.append(f"weak momentum {momentum_score:.0f}")
+        if insider_score < 40:
+            reasons.append("insider selling pressure")
+        if congress_score < 40:
+            reasons.append("Congress selling pressure")
+        if not reasons:
+            reasons.append(f"overall score only {integrated_score:.0f}")
+        risks.append(
+            {
+                **row,
+                "risk_score": risk_score,
+                "risk_level": risk_level,
+                "risk_reason": "; ".join(reasons[:3]) + ".",
+            }
+        )
+    return sorted(risks, key=lambda item: float(item["risk_score"]), reverse=True)[:limit]
+
+
 def _disclosure_scores(rows, value_fields: tuple[str, ...]) -> dict[str, dict[str, float | int]]:
     aggregates: dict[str, dict[str, float | int]] = {}
     for row in _iter_records(rows):
