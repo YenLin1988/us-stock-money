@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
 
+from us_stock_money import scoring as scoring_module
 from us_stock_money.alerts import evaluate_alerts
 from us_stock_money.congress_trades import DISPLAY_COLUMNS, download_congress_trades, filter_congress_trades
 from us_stock_money.insider_trades import (
@@ -32,7 +33,6 @@ from us_stock_money.model_config import MARKET_DATA_VERSION, WATCHLIST_TICKERS
 from us_stock_money.scoring import (
     broad_flow_score,
     build_breakout_candidates,
-    build_integrated_recommendations,
     build_intraday_breakout_candidates,
     build_top_recommendations,
     classify_regime,
@@ -231,6 +231,34 @@ def apply_intraday_prices(recommendations: list[dict[str, object]], intraday_pri
             item["price_source"] = "1d"
         enriched.append(item)
     return enriched
+
+
+def build_integrated_recommendations(*args, **kwargs) -> list[dict[str, object]]:
+    builder = getattr(scoring_module, "build_integrated_recommendations", None)
+    if builder is not None:
+        return builder(*args, **kwargs)
+
+    component_rows, theme_scores = args[:2]
+    limit = int(kwargs.get("limit", 5))
+    fallback = build_top_recommendations(component_rows, theme_scores, limit=limit)
+    return [
+        {
+            **item,
+            "integrated_score": float(item["composite_score"]),
+            "rating": "Neutral",
+            "momentum_score": 50.0,
+            "intraday_score": 50.0,
+            "congress_score": 50.0,
+            "insider_score": 50.0,
+            "market_score": float(kwargs.get("market_score", 50.0)),
+            "exit_signal": "Watch",
+            "congress_buys": 0,
+            "congress_sales": 0,
+            "insider_buys": 0,
+            "insider_sales": 0,
+        }
+        for item in fallback
+    ]
 
 
 def render_page_header(title: str, caption: str) -> None:
