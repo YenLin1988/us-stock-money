@@ -4,7 +4,10 @@ from us_stock_money.insider_trades import (
     aggregate_insider_by_ticker,
     filter_insider_trades,
     normalize_insider_trades,
+    normalize_yahoo_insider_transactions,
     parse_form4_feed,
+    parse_nokia_manager_release,
+    parse_nokia_release_links,
     parse_ownership_document,
     summarize_insider_trades,
 )
@@ -92,6 +95,81 @@ class InsiderTradesTests(unittest.TestCase):
         )
 
         self.assertEqual(rows, [])
+
+    def test_parses_nokia_article_19_acquisition(self):
+        listing = """
+        <a class="td_headlines" title="Nokia Corporation - Managers' transactions (Doe)"
+           href="https://www.nokia.com/newsroom/example/">Example</a>
+        """
+        release = """
+        <html><body>
+        Nokia Corporation Managers’ transactions 31 May 2026 at 13:00 EEST
+        Transaction notification under Article 19 of EU Market Abuse Regulation.
+        Person subject to the notification requirement
+        Name: Doe, Jane
+        Position: Other senior manager
+        Transaction date: 2026-05-26
+        Venue: XNYS
+        Instrument type: SHARE
+        Nature of the transaction: ACQUISITION
+        Transaction details
+        (1): Volume: 22713 Unit price: 16.0179 USD
+        Aggregated transactions
+        About Nokia
+        </body></html>
+        """
+
+        links = parse_nokia_release_links(listing)
+        rows = parse_nokia_manager_release(release, filing_url=links[0])
+
+        self.assertEqual(links, ["https://www.nokia.com/newsroom/example/"])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["ticker"], "NOK")
+        self.assertEqual(rows[0]["owner_name"], "Doe, Jane")
+        self.assertEqual(rows[0]["trade_side"], "Purchase")
+        self.assertEqual(rows[0]["source"], "Nokia Article 19")
+        self.assertAlmostEqual(rows[0]["estimated_value"], 22713 * 16.0179)
+
+    def test_normalizes_yahoo_purchase_and_sale_but_skips_awards(self):
+        import pandas as pd
+
+        frame = pd.DataFrame(
+            [
+                {
+                    "Shares": 20,
+                    "Value": 7760,
+                    "Text": "Purchase at price 386.00 - 390.00 per share.",
+                    "Insider": "TIEN BOR-ZEN",
+                    "Position": "Officer",
+                    "Start Date": "2026-04-28",
+                    "URL": "",
+                },
+                {
+                    "Shares": 100,
+                    "Value": 25000,
+                    "Text": "Sale at price 250.00 per share.",
+                    "Insider": "JANE DOE",
+                    "Position": "Director",
+                    "Start Date": "2026-04-20",
+                    "URL": "https://example.com",
+                },
+                {
+                    "Shares": 500,
+                    "Value": 0,
+                    "Text": "Stock Award(Grant) at price 0.00 per share.",
+                    "Insider": "JANE DOE",
+                    "Position": "Director",
+                    "Start Date": "2026-04-10",
+                },
+            ]
+        )
+
+        rows = normalize_yahoo_insider_transactions(frame, ticker="TSM")
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(set(rows["trade_side"]), {"Purchase", "Sale"})
+        self.assertEqual(rows.iloc[0]["source"], "Yahoo Finance")
+        self.assertEqual(rows.iloc[0]["ticker"], "TSM")
 
     def test_summary_and_filters(self):
         frame = normalize_insider_trades(

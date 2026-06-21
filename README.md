@@ -13,6 +13,7 @@ The Streamlit app uses native multi-page navigation:
 | Decision Dashboard | Focused recommendations, risk watchlist, and weekly money-flow direction |
 | Recommendations | Integrated rankings with factor-level scores |
 | Signals | Market timing, 5-minute breakouts, and exit signals |
+| Dark Pool Activity | Delayed FINRA ATS volume anomalies and weekly history |
 | Stock Analysis | MA60 breakdown alerts and per-stock daily technical charts |
 | Disclosures | Congressional STOCK Act and SEC Form 4 transactions |
 | Market Research | Weekly money-flow trends, theme rotation, watchlist, sectors, benchmarks, and component tables |
@@ -150,6 +151,19 @@ The Stock Analysis page scans the tracked universe for quarterly-line risk:
 Daily prices come from Yahoo Finance and can be delayed, incomplete, or adjusted after corporate actions.
 Analyst target history also comes from Yahoo Finance and may not include every institution or report.
 
+## Dark Pool Activity
+
+The Dark Pool Activity page uses FINRA's official weekly ATS summary:
+
+- scans the tracked universe for ATS share volume at least 2x the prior eight-week median
+- also flags statistically unusual volume with a default z-score threshold of 2.5
+- applies a minimum-share threshold to reduce small-base false positives
+- compares ATS shares with consolidated weekly market volume
+- shows FINRA publication dates, because ATS data is delayed by approximately two to four weeks
+- provides per-stock weekly ATS history and links into technical analysis
+
+FINRA's public ATS data reports aggregate volume and trade counts, not buyer- or seller-initiated direction. The dashboard therefore labels these records as unusual activity rather than buy or sell signals.
+
 ## 5m Intraday Market Monitor
 
 The dashboard also includes a free Yahoo Finance 5-minute intraday monitor for SPY, QQQ, and IWM:
@@ -187,6 +201,10 @@ The dashboard also reads the latest SEC Form 4 filings and summarizes open-marke
 - direct link to the official SEC filing
 
 Only Form 4/4-A transaction codes `P` (open-market purchase) and `S` (open-market sale) are counted. Form 10-K filings, stock awards, option exercises, gifts, and tax withholding are excluded.
+
+Nokia (`NOK`) is handled as a supplemental foreign-issuer case using Nokia's official Article 19 manager-transaction releases. These records show the reported transaction date, manager, role, acquisition/disposal, shares, price, currency, and official source link. Congressional source coverage can legitimately return no `NOK` records.
+
+When a complete tracked ticker is entered in the insider search, the app also requests ticker-specific Yahoo Finance insider transactions and merges them with the recent SEC feed and available official-company supplements. This improves coverage for both foreign issuers such as TSM, ARM, NXPI, and SIMO and U.S. companies that may fall outside the short latest-filing feed window. Empty results still do not prove that no transaction occurred.
 
 ## Regimes
 
