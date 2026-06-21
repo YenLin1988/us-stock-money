@@ -119,6 +119,17 @@ st.markdown(
     .risk-card { border-top: 3px solid #f85149; }
     .card-score { font-size: 1.7rem; font-weight: 700; color: #f0f6fc; margin: 0.55rem 0 0; }
     .card-reason { color: #b1bac4; font-size: 0.86rem; margin-top: 0.75rem; line-height: 1.4; }
+    .stock-analysis-link { color: #f0f6fc; text-decoration: none; }
+    .stock-analysis-link:hover { color: #58a6ff; text-decoration: underline; }
+    .analysis-action {
+        display: inline-block;
+        color: #58a6ff;
+        font-size: 0.82rem;
+        font-weight: 700;
+        margin-top: 0.75rem;
+        text-decoration: none;
+    }
+    .analysis-action:hover { text-decoration: underline; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -204,6 +215,16 @@ def pct_color_class(value: float) -> str:
 
 def fmt_price(value: float) -> str:
     return f"${value:,.2f}"
+
+
+def stock_analysis_url(ticker: object) -> str:
+    return f"/stock-analysis?ticker={str(ticker).strip().upper()}"
+
+
+def add_stock_analysis_links(frame: pd.DataFrame) -> pd.DataFrame:
+    display = frame.copy()
+    display["analysis_url"] = display["ticker"].map(stock_analysis_url)
+    return display
 
 
 def exit_signal_class(value: object) -> str:
@@ -502,7 +523,7 @@ def decision_dashboard_page() -> None:
                     f"""
                     <div class="recommend-card">
                         <div class="small-label">#{index} {candidate["rating"]}</div>
-                        <h2 style="margin: 0.25rem 0 0;">{candidate["ticker"]}</h2>
+                        <h2 style="margin: 0.25rem 0 0;"><a class="stock-analysis-link" href="{stock_analysis_url(candidate["ticker"])}" target="_self">{candidate["ticker"]}</a></h2>
                         <div class="small-label">{candidate["themes"]}</div>
                         <div class="card-score">{float(candidate["integrated_score"]):.1f}</div>
                         <div class="price-row">
@@ -510,16 +531,18 @@ def decision_dashboard_page() -> None:
                             <span class="{pct_color_class(float(candidate["open_to_current_pct"]))}">{fmt_pct(float(candidate["open_to_current_pct"]))}</span>
                         </div>
                         <div class="card-reason">{candidate["reason"]}</div>
+                        <a class="analysis-action" href="{stock_analysis_url(candidate["ticker"])}" target="_self">View technical analysis</a>
                     </div>
                     """,
                     unsafe_allow_html=True,
                 )
         with st.expander("See recommendation factor details"):
-            recommendation_df = pd.DataFrame(recommended)
+            recommendation_df = add_stock_analysis_links(pd.DataFrame(recommended))
             st.dataframe(
                 recommendation_df[
                     [
                         "ticker",
+                        "analysis_url",
                         "integrated_score",
                         "rating",
                         "flow_score",
@@ -544,6 +567,9 @@ def decision_dashboard_page() -> None:
                 ),
                 width="stretch",
                 hide_index=True,
+                column_config={
+                    "analysis_url": st.column_config.LinkColumn("Analysis", display_text="Open chart"),
+                },
             )
     else:
         st.warning("No stock currently passes the recommendation and risk filters.")
@@ -558,21 +584,23 @@ def decision_dashboard_page() -> None:
                     f"""
                     <div class="risk-card">
                         <div class="small-label">{candidate["risk_level"]}</div>
-                        <h2 style="margin: 0.25rem 0 0;">{candidate["ticker"]}</h2>
+                        <h2 style="margin: 0.25rem 0 0;"><a class="stock-analysis-link" href="{stock_analysis_url(candidate["ticker"])}" target="_self">{candidate["ticker"]}</a></h2>
                         <div class="small-label">{candidate.get("themes", "")}</div>
                         <div class="card-score">{float(candidate["risk_score"]):.1f}</div>
                         <div class="small-label">Risk score · 5m {candidate["exit_signal"]}</div>
                         <div class="card-reason">{candidate["risk_reason"]}</div>
+                        <a class="analysis-action" href="{stock_analysis_url(candidate["ticker"])}" target="_self">View technical analysis</a>
                     </div>
                     """,
                     unsafe_allow_html=True,
                 )
         with st.expander("See full risk watchlist"):
-            risk_df = pd.DataFrame(risks)
+            risk_df = add_stock_analysis_links(pd.DataFrame(risks))
             st.dataframe(
                 risk_df[
                     [
                         "ticker",
+                        "analysis_url",
                         "risk_score",
                         "risk_level",
                         "integrated_score",
@@ -593,6 +621,9 @@ def decision_dashboard_page() -> None:
                 ),
                 width="stretch",
                 hide_index=True,
+                column_config={
+                    "analysis_url": st.column_config.LinkColumn("Analysis", display_text="Open chart"),
+                },
             )
     else:
         st.success("No high-risk stocks were identified in the current universe.")
@@ -681,7 +712,7 @@ def recommendations_page() -> None:
                 f"""
                 <div class="flow-card">
                     <div class="small-label">#{index} Integrated</div>
-                    <h3 style="margin: 0.2rem 0 0.1rem 0;">{candidate["ticker"]}</h3>
+                    <h3 style="margin: 0.2rem 0 0.1rem 0;"><a class="stock-analysis-link" href="{stock_analysis_url(candidate["ticker"])}" target="_self">{candidate["ticker"]}</a></h3>
                     <div class="small-label">{candidate["themes"]}</div>
                     <p style="font-size: 1.35rem; margin: 0.6rem 0 0.2rem 0;">{float(candidate["integrated_score"]):.1f}</p>
                     <div class="small-label">Integrated score</div>
@@ -693,12 +724,13 @@ def recommendations_page() -> None:
                         <span class="small-label">{candidate["exit_signal"]}</span>
                         <span class="exit-signal {rating_class(rating)}">{rating}</span>
                     </div>
+                    <a class="analysis-action" href="{stock_analysis_url(candidate["ticker"])}" target="_self">View technical analysis</a>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
-    display = pd.DataFrame(candidates)
+    display = add_stock_analysis_links(pd.DataFrame(candidates))
     score_columns = [
         "integrated_score",
         "flow_score",
@@ -711,6 +743,7 @@ def recommendations_page() -> None:
     ]
     columns = [
         "ticker",
+        "analysis_url",
         "themes",
         "integrated_score",
         "rating",
@@ -731,7 +764,14 @@ def recommendations_page() -> None:
         }.get(value, ""),
         subset=["rating"],
     )
-    st.dataframe(styled, width="stretch", hide_index=True)
+    st.dataframe(
+        styled,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "analysis_url": st.column_config.LinkColumn("Analysis", display_text="Open chart"),
+        },
+    )
     with st.expander("Scoring methodology"):
         st.write(
             "Flow 25%, theme 15%, daily momentum 15%, 5m setup 20%, Congress 10%, "
@@ -802,7 +842,15 @@ def signals_page() -> None:
 
     st.subheader("Daily Flow Candidates")
     daily_candidates = build_top_recommendations(context["component_df"], context["theme_scores"], limit=20)
-    st.dataframe(pd.DataFrame(daily_candidates), width="stretch", hide_index=True)
+    daily_display = add_stock_analysis_links(pd.DataFrame(daily_candidates))
+    st.dataframe(
+        daily_display,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "analysis_url": st.column_config.LinkColumn("Analysis", display_text="Open chart"),
+        },
+    )
 
 
 def disclosures_page() -> None:
@@ -1684,7 +1732,7 @@ def main() -> None:
                 f"""
                 <div class="flow-card">
                     <div class="small-label">#{index} Integrated</div>
-                    <h3 style="margin: 0.2rem 0 0.1rem 0;">{candidate["ticker"]}</h3>
+                    <h3 style="margin: 0.2rem 0 0.1rem 0;"><a class="stock-analysis-link" href="{stock_analysis_url(candidate["ticker"])}" target="_self">{candidate["ticker"]}</a></h3>
                     <div class="small-label">{candidate["themes"]}</div>
                     <p style="font-size: 1.35rem; margin: 0.6rem 0 0.2rem 0;">{float(candidate["integrated_score"]):.1f}</p>
                     <div class="small-label">Integrated score</div>
@@ -1696,15 +1744,17 @@ def main() -> None:
                         <span class="small-label">{int(candidate["congress_buys"])}B/{int(candidate["congress_sales"])}S Congress · {int(candidate["insider_buys"])}B/{int(candidate["insider_sales"])}S insider</span>
                         <span class="exit-signal {rating_class(rating)}">{rating}</span>
                     </div>
+                    <a class="analysis-action" href="{stock_analysis_url(candidate["ticker"])}" target="_self">View technical analysis</a>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
-    integrated_display = pd.DataFrame(integrated_recommendations)
+    integrated_display = add_stock_analysis_links(pd.DataFrame(integrated_recommendations))
     if not integrated_display.empty:
         integrated_columns = [
             "ticker",
+            "analysis_url",
             "themes",
             "integrated_score",
             "rating",
@@ -1743,7 +1793,14 @@ def main() -> None:
             }.get(value, ""),
             subset=["rating"],
         )
-        st.dataframe(integrated_styled, width="stretch", hide_index=True)
+        st.dataframe(
+            integrated_styled,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "analysis_url": st.column_config.LinkColumn("Analysis", display_text="Open chart"),
+            },
+        )
 
     st.subheader("Top 5 5m Breakout Candidates")
     if intraday_breakout_candidates:
@@ -1758,7 +1815,7 @@ def main() -> None:
                     f"""
                     <div class="flow-card">
                         <div class="small-label">#{index} 5m Breakout</div>
-                        <h3 style="margin: 0.2rem 0 0.1rem 0;">{candidate["ticker"]}</h3>
+                        <h3 style="margin: 0.2rem 0 0.1rem 0;"><a class="stock-analysis-link" href="{stock_analysis_url(candidate["ticker"])}" target="_self">{candidate["ticker"]}</a></h3>
                         <div class="small-label">{candidate["themes"]}</div>
                         <p style="font-size: 1.35rem; margin: 0.6rem 0 0.2rem 0;">{float(candidate["breakout_score"]):.1f}</p>
                         <div class="small-label">5m breakout score</div>

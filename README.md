@@ -119,6 +119,8 @@ The dashboard also produces a transparent integrated ranking that combines all a
 
 Missing disclosure activity receives a neutral score rather than a penalty. An active 5-minute `Trim` or `Exit` signal applies an additional risk deduction. Congressional and insider filings are delayed supporting signals and never override weak market or price action by themselves.
 
+Recommendation cards, ranking tables, daily flow candidates, and risk watchlists link directly to each ticker's technical analysis with daily candles, MA5, MA20, MA60, volume, RSI, and MACD.
+
 ## Market Timing Signal
 
 Before showing candidate stocks, the dashboard checks whether broad-market conditions are suitable for new entries:
