@@ -13,6 +13,7 @@ The Streamlit app uses native multi-page navigation:
 | Decision Dashboard | Focused recommendations, risk watchlist, and weekly money-flow direction |
 | Recommendations | Integrated rankings with factor-level scores |
 | Signals | Market timing, 5-minute breakouts, and exit signals |
+| Stock Analysis | MA60 breakdown alerts and per-stock daily technical charts |
 | Disclosures | Congressional STOCK Act and SEC Form 4 transactions |
 | Market Research | Weekly money-flow trends, theme rotation, watchlist, sectors, benchmarks, and component tables |
 | Full Dashboard | Complete legacy dashboard and every monitoring section |
@@ -118,6 +119,8 @@ The dashboard also produces a transparent integrated ranking that combines all a
 
 Missing disclosure activity receives a neutral score rather than a penalty. An active 5-minute `Trim` or `Exit` signal applies an additional risk deduction. Congressional and insider filings are delayed supporting signals and never override weak market or price action by themselves.
 
+Recommendation cards, ranking tables, daily flow candidates, and risk watchlists link directly to each ticker's technical analysis with daily candles, MA5, MA20, MA60, volume, RSI, and MACD.
+
 ## Market Timing Signal
 
 Before showing candidate stocks, the dashboard checks whether broad-market conditions are suitable for new entries:
@@ -127,6 +130,25 @@ Before showing candidate stocks, the dashboard checks whether broad-market condi
 - **Wait for Confirmation**: conditions are mixed and the dashboard waits for clearer confirmation.
 
 This signal is a market-regime filter, not personal financial advice.
+
+## Stock Technical Analysis
+
+The Stock Analysis page scans the tracked universe for quarterly-line risk:
+
+- flags stocks that crossed below MA60 during the latest five trading sessions
+- separates new breakdowns from stocks that remain below MA60
+- shows distance to MA60 plus 5-day and 20-day returns
+- links each alert to a per-stock daily candlestick chart
+- overlays MA5, MA20 monthly line, and MA60 quarterly line
+- includes volume, RSI (14), MACD (12/26/9), 20-day annualized volatility, 52-week range, and drawdown
+- shows trailing and forward P/E plus common valuation multiples
+- compares trailing and forward P/E with other tracked stocks in the same theme
+- shows theme medians and the selected stock's valuation premium or discount
+- shows consensus high, low, mean, and median analyst targets
+- lists dated institutional target-price actions with firm, rating, prior target, and upside versus current price
+
+Daily prices come from Yahoo Finance and can be delayed, incomplete, or adjusted after corporate actions.
+Analyst target history also comes from Yahoo Finance and may not include every institution or report.
 
 ## 5m Intraday Market Monitor
 
@@ -145,6 +167,8 @@ The dashboard tracks recently disclosed congressional stock transactions collect
 - filter by the last 30, 90, 180, or 365 days
 - filter by House or Senate and by purchase or sale
 - search by ticker
+- review stock-level net buying and selling rankings before opening transaction detail
+- compare estimated buy, sale, and net values using disclosed range midpoints
 - compare transaction dates with filing dates and disclosure delays
 - open the official filing document for each transaction
 
@@ -156,6 +180,8 @@ The dashboard also reads the latest SEC Form 4 filings and summarizes open-marke
 
 - total shares and estimated value bought and sold
 - net insider buying or selling value
+- stock-level activity rankings with distinct insider counts and latest trade dates
+- a compact transaction view with value, role, price, and post-transaction holdings
 - company ticker, insider name, and executive/director role
 - transaction price, shares, and post-transaction ownership
 - direct link to the official SEC filing

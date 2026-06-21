@@ -194,12 +194,58 @@ def summarize_insider_trades(frame: pd.DataFrame) -> dict[str, float]:
     purchase_value = float(purchases["estimated_value"].sum())
     sale_value = float(sales["estimated_value"].sum())
     return {
+        "trades": float(len(frame)),
+        "tickers": float(frame.loc[frame["ticker"] != "", "ticker"].nunique()),
         "purchase_shares": float(purchases["shares"].sum()),
         "sale_shares": float(sales["shares"].sum()),
         "purchase_value": purchase_value,
         "sale_value": sale_value,
         "net_value": purchase_value - sale_value,
     }
+
+
+def aggregate_insider_by_ticker(frame: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "ticker",
+        "issuer_name",
+        "signal",
+        "trade_count",
+        "purchases",
+        "sales",
+        "buy_value",
+        "sale_value",
+        "net_value",
+        "insider_count",
+        "latest_trade",
+    ]
+    usable = frame[frame["ticker"].fillna("") != ""].copy()
+    if usable.empty:
+        return pd.DataFrame(columns=columns)
+
+    rows = []
+    for ticker, group in usable.groupby("ticker", sort=False):
+        purchases = group[group["trade_side"] == "Purchase"]
+        sales = group[group["trade_side"] == "Sale"]
+        buy_value = float(purchases["estimated_value"].sum())
+        sale_value = float(sales["estimated_value"].sum())
+        rows.append(
+            {
+                "ticker": ticker,
+                "issuer_name": _latest_text(group, "issuer_name"),
+                "signal": _activity_signal(buy_value, sale_value),
+                "trade_count": len(group),
+                "purchases": len(purchases),
+                "sales": len(sales),
+                "buy_value": buy_value,
+                "sale_value": sale_value,
+                "net_value": buy_value - sale_value,
+                "insider_count": group["owner_name"].nunique(),
+                "latest_trade": group["transaction_date"].max(),
+            }
+        )
+    result = pd.DataFrame(rows)
+    result["_activity"] = result["buy_value"] + result["sale_value"]
+    return result.sort_values("_activity", ascending=False).drop(columns="_activity").reset_index(drop=True)
 
 
 def _owner_role(root: ElementTree.Element) -> str:
@@ -232,3 +278,20 @@ def _number(root: ElementTree.Element, path: str) -> float:
         return float(_text(root, path).replace(",", ""))
     except ValueError:
         return 0.0
+
+
+def _latest_text(frame: pd.DataFrame, column: str) -> str:
+    values = frame.sort_values("transaction_date", ascending=False)[column].dropna().astype(str)
+    return values.iloc[0] if not values.empty else ""
+
+
+def _activity_signal(buy_value: float, sale_value: float) -> str:
+    total = buy_value + sale_value
+    if total == 0:
+        return "No Value"
+    buy_share = buy_value / total
+    if buy_share >= 0.65:
+        return "Net Buying"
+    if buy_share <= 0.35:
+        return "Net Selling"
+    return "Mixed"

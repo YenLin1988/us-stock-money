@@ -8,12 +8,26 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
+from plotly.subplots import make_subplots
 
 from us_stock_money import scoring as scoring_module
+from us_stock_money.analyst_data import (
+    download_analyst_data,
+    download_peer_valuations,
+    pe_comparison_summary,
+    themes_for_ticker,
+)
 from us_stock_money.alerts import evaluate_alerts
-from us_stock_money.congress_trades import DISPLAY_COLUMNS, download_congress_trades, filter_congress_trades
+from us_stock_money.congress_trades import (
+    DISPLAY_COLUMNS,
+    aggregate_congress_by_ticker,
+    download_congress_trades,
+    filter_congress_trades,
+    summarize_congress_trades,
+)
 from us_stock_money.insider_trades import (
     DISPLAY_COLUMNS as INSIDER_DISPLAY_COLUMNS,
+    aggregate_insider_by_ticker,
     download_insider_trades,
     filter_insider_trades,
     summarize_insider_trades,
@@ -30,7 +44,7 @@ from us_stock_money.market_data import (
     download_intraday_prices,
     download_prices,
 )
-from us_stock_money.model_config import MARKET_DATA_VERSION, WATCHLIST_TICKERS
+from us_stock_money.model_config import ALL_TICKERS, MARKET_DATA_VERSION, WATCHLIST_TICKERS
 from us_stock_money.scoring import (
     broad_flow_score,
     build_breakout_candidates,
@@ -43,6 +57,7 @@ from us_stock_money.scoring import (
     theme_group_scores,
 )
 from us_stock_money.storage import HistoryStore
+from us_stock_money.technical_analysis import build_ma60_alerts, build_stock_detail, stock_snapshot
 
 
 st.set_page_config(page_title="US STOCK MONEY", page_icon="$", layout="wide")
@@ -110,6 +125,17 @@ st.markdown(
     .risk-card { border-top: 3px solid #f85149; }
     .card-score { font-size: 1.7rem; font-weight: 700; color: #f0f6fc; margin: 0.55rem 0 0; }
     .card-reason { color: #b1bac4; font-size: 0.86rem; margin-top: 0.75rem; line-height: 1.4; }
+    .stock-analysis-link { color: #f0f6fc; text-decoration: none; }
+    .stock-analysis-link:hover { color: #58a6ff; text-decoration: underline; }
+    .analysis-action {
+        display: inline-block;
+        color: #58a6ff;
+        font-size: 0.82rem;
+        font-weight: 700;
+        margin-top: 0.75rem;
+        text-decoration: none;
+    }
+    .analysis-action:hover { text-decoration: underline; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -140,6 +166,21 @@ def load_intraday_data(market_data_version: str) -> pd.DataFrame:
 def load_intraday_component_data(market_data_version: str) -> pd.DataFrame:
     data = download_intraday_component_prices(period="5d", interval="5m")
     return build_intraday_component_table(data)
+
+
+@st.cache_data(ttl=900)
+def load_technical_data(market_data_version: str) -> pd.DataFrame:
+    return download_prices(period="1y", interval="1d")
+
+
+@st.cache_data(ttl=3600)
+def load_analyst_data(ticker: str) -> tuple[dict[str, object], pd.DataFrame]:
+    return download_analyst_data(ticker)
+
+
+@st.cache_data(ttl=3600)
+def load_peer_valuation_data(ticker: str, theme: str) -> pd.DataFrame:
+    return download_peer_valuations(ticker, theme)
 
 
 @st.cache_data(ttl=3600)
@@ -192,6 +233,27 @@ def fmt_price(value: float) -> str:
     return f"${value:,.2f}"
 
 
+def fmt_optional_multiple(value: object) -> str:
+    return "N/A" if value is None or pd.isna(value) else f"{float(value):.1f}x"
+
+
+def fmt_optional_price(value: object, currency: str = "USD") -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
+    prefix = "$" if currency == "USD" else f"{currency} "
+    return f"{prefix}{float(value):,.2f}"
+
+
+def stock_analysis_url(ticker: object) -> str:
+    return f"/stock-analysis?ticker={str(ticker).strip().upper()}"
+
+
+def add_stock_analysis_links(frame: pd.DataFrame) -> pd.DataFrame:
+    display = frame.copy()
+    display["analysis_url"] = display["ticker"].map(stock_analysis_url)
+    return display
+
+
 def exit_signal_class(value: object) -> str:
     return {
         "Hold": "exit-hold",
@@ -242,6 +304,59 @@ def fmt_dollar_compact(value: float) -> str:
     if absolute >= 1_000:
         return f"${value / 1_000:,.1f}K"
     return f"${value:,.0f}"
+
+
+def disclosure_style(value: object) -> str:
+    if value in {"Purchase", "Net Buying"}:
+        return "color: #3fb950; font-weight: 700"
+    if value in {"Sale", "Net Selling"}:
+        return "color: #f85149; font-weight: 700"
+    if value == "Mixed":
+        return "color: #d29922; font-weight: 700"
+    return ""
+
+
+def net_value_style(value: object) -> str:
+    if pd.isna(value):
+        return ""
+    return "color: #3fb950; font-weight: 700" if float(value) >= 0 else "color: #f85149; font-weight: 700"
+
+
+def render_disclosure_activity_chart(
+    frame: pd.DataFrame,
+    *,
+    value_column: str,
+    title: str,
+) -> None:
+    if frame.empty:
+        return
+    chart_data = (
+        frame.assign(_magnitude=frame[value_column].abs())
+        .nlargest(12, "_magnitude")
+        .drop(columns="_magnitude")
+    )
+    chart_data = chart_data.sort_values(value_column)
+    chart = px.bar(
+        chart_data,
+        x=value_column,
+        y="ticker",
+        orientation="h",
+        color=value_column,
+        color_continuous_scale=["#f85149", "#111820", "#3fb950"],
+        color_continuous_midpoint=0,
+        title=title,
+    )
+    chart.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        height=max(330, len(chart_data) * 34),
+        coloraxis_showscale=False,
+        xaxis_title="Net selling ← Estimated value → Net buying",
+        yaxis_title="",
+        margin={"l": 20, "r": 20, "t": 50, "b": 35},
+    )
+    st.plotly_chart(chart, width="stretch")
 
 
 def apply_intraday_prices(recommendations: list[dict[str, object]], intraday_prices: pd.DataFrame) -> list[dict[str, object]]:
@@ -435,7 +550,7 @@ def decision_dashboard_page() -> None:
                     f"""
                     <div class="recommend-card">
                         <div class="small-label">#{index} {candidate["rating"]}</div>
-                        <h2 style="margin: 0.25rem 0 0;">{candidate["ticker"]}</h2>
+                        <h2 style="margin: 0.25rem 0 0;"><a class="stock-analysis-link" href="{stock_analysis_url(candidate["ticker"])}" target="_self">{candidate["ticker"]}</a></h2>
                         <div class="small-label">{candidate["themes"]}</div>
                         <div class="card-score">{float(candidate["integrated_score"]):.1f}</div>
                         <div class="price-row">
@@ -443,16 +558,18 @@ def decision_dashboard_page() -> None:
                             <span class="{pct_color_class(float(candidate["open_to_current_pct"]))}">{fmt_pct(float(candidate["open_to_current_pct"]))}</span>
                         </div>
                         <div class="card-reason">{candidate["reason"]}</div>
+                        <a class="analysis-action" href="{stock_analysis_url(candidate["ticker"])}" target="_self">View technical analysis</a>
                     </div>
                     """,
                     unsafe_allow_html=True,
                 )
         with st.expander("See recommendation factor details"):
-            recommendation_df = pd.DataFrame(recommended)
+            recommendation_df = add_stock_analysis_links(pd.DataFrame(recommended))
             st.dataframe(
                 recommendation_df[
                     [
                         "ticker",
+                        "analysis_url",
                         "integrated_score",
                         "rating",
                         "flow_score",
@@ -477,6 +594,9 @@ def decision_dashboard_page() -> None:
                 ),
                 width="stretch",
                 hide_index=True,
+                column_config={
+                    "analysis_url": st.column_config.LinkColumn("Analysis", display_text="Open chart"),
+                },
             )
     else:
         st.warning("No stock currently passes the recommendation and risk filters.")
@@ -491,21 +611,23 @@ def decision_dashboard_page() -> None:
                     f"""
                     <div class="risk-card">
                         <div class="small-label">{candidate["risk_level"]}</div>
-                        <h2 style="margin: 0.25rem 0 0;">{candidate["ticker"]}</h2>
+                        <h2 style="margin: 0.25rem 0 0;"><a class="stock-analysis-link" href="{stock_analysis_url(candidate["ticker"])}" target="_self">{candidate["ticker"]}</a></h2>
                         <div class="small-label">{candidate.get("themes", "")}</div>
                         <div class="card-score">{float(candidate["risk_score"]):.1f}</div>
                         <div class="small-label">Risk score · 5m {candidate["exit_signal"]}</div>
                         <div class="card-reason">{candidate["risk_reason"]}</div>
+                        <a class="analysis-action" href="{stock_analysis_url(candidate["ticker"])}" target="_self">View technical analysis</a>
                     </div>
                     """,
                     unsafe_allow_html=True,
                 )
         with st.expander("See full risk watchlist"):
-            risk_df = pd.DataFrame(risks)
+            risk_df = add_stock_analysis_links(pd.DataFrame(risks))
             st.dataframe(
                 risk_df[
                     [
                         "ticker",
+                        "analysis_url",
                         "risk_score",
                         "risk_level",
                         "integrated_score",
@@ -526,6 +648,9 @@ def decision_dashboard_page() -> None:
                 ),
                 width="stretch",
                 hide_index=True,
+                column_config={
+                    "analysis_url": st.column_config.LinkColumn("Analysis", display_text="Open chart"),
+                },
             )
     else:
         st.success("No high-risk stocks were identified in the current universe.")
@@ -614,7 +739,7 @@ def recommendations_page() -> None:
                 f"""
                 <div class="flow-card">
                     <div class="small-label">#{index} Integrated</div>
-                    <h3 style="margin: 0.2rem 0 0.1rem 0;">{candidate["ticker"]}</h3>
+                    <h3 style="margin: 0.2rem 0 0.1rem 0;"><a class="stock-analysis-link" href="{stock_analysis_url(candidate["ticker"])}" target="_self">{candidate["ticker"]}</a></h3>
                     <div class="small-label">{candidate["themes"]}</div>
                     <p style="font-size: 1.35rem; margin: 0.6rem 0 0.2rem 0;">{float(candidate["integrated_score"]):.1f}</p>
                     <div class="small-label">Integrated score</div>
@@ -626,12 +751,13 @@ def recommendations_page() -> None:
                         <span class="small-label">{candidate["exit_signal"]}</span>
                         <span class="exit-signal {rating_class(rating)}">{rating}</span>
                     </div>
+                    <a class="analysis-action" href="{stock_analysis_url(candidate["ticker"])}" target="_self">View technical analysis</a>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
-    display = pd.DataFrame(candidates)
+    display = add_stock_analysis_links(pd.DataFrame(candidates))
     score_columns = [
         "integrated_score",
         "flow_score",
@@ -644,6 +770,7 @@ def recommendations_page() -> None:
     ]
     columns = [
         "ticker",
+        "analysis_url",
         "themes",
         "integrated_score",
         "rating",
@@ -664,7 +791,14 @@ def recommendations_page() -> None:
         }.get(value, ""),
         subset=["rating"],
     )
-    st.dataframe(styled, width="stretch", hide_index=True)
+    st.dataframe(
+        styled,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "analysis_url": st.column_config.LinkColumn("Analysis", display_text="Open chart"),
+        },
+    )
     with st.expander("Scoring methodology"):
         st.write(
             "Flow 25%, theme 15%, daily momentum 15%, 5m setup 20%, Congress 10%, "
@@ -735,57 +869,327 @@ def signals_page() -> None:
 
     st.subheader("Daily Flow Candidates")
     daily_candidates = build_top_recommendations(context["component_df"], context["theme_scores"], limit=20)
-    st.dataframe(pd.DataFrame(daily_candidates), width="stretch", hide_index=True)
+    daily_display = add_stock_analysis_links(pd.DataFrame(daily_candidates))
+    st.dataframe(
+        daily_display,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "analysis_url": st.column_config.LinkColumn("Analysis", display_text="Open chart"),
+        },
+    )
 
 
 def disclosures_page() -> None:
     render_page_header(
         "Disclosures",
-        "Congressional STOCK Act filings and SEC Form 4/4-A open-market insider transactions.",
+        "Readable stock-level summaries of congressional disclosures and SEC open-market insider transactions.",
     )
     congress_df, insider_df = load_disclosure_context()
 
-    st.subheader("Congress Stock Trades")
-    if congress_df.empty:
-        st.info("No congressional disclosure data is available.")
-    else:
-        filter1, filter2, filter3 = st.columns([0.8, 1.2, 1])
-        days = filter1.selectbox("Lookback", [30, 90, 180, 365], index=1, format_func=lambda value: f"{value} days")
-        sides = filter2.multiselect("Transaction", ["Purchase", "Sale", "Exchange", "Other"], default=["Purchase", "Sale"])
-        ticker = filter3.text_input("Congress ticker", placeholder="NVDA")
-        congress_display = filter_congress_trades(congress_df, days=days, sides=sides, ticker=ticker)
-        metrics = st.columns(3)
-        metrics[0].metric("Trades", len(congress_display))
-        metrics[1].metric("Purchases", int((congress_display["trade_side"] == "Purchase").sum()))
-        metrics[2].metric("Sales", int((congress_display["trade_side"] == "Sale").sum()))
-        st.dataframe(
-            congress_display[DISPLAY_COLUMNS + ["trade_side"]],
-            width="stretch",
-            hide_index=True,
-            column_config={"doc_url": st.column_config.LinkColumn("Official Filing", display_text="Open filing")},
+    congress_tab, insider_tab = st.tabs(["Congress", "Corporate Insiders"])
+    with congress_tab:
+        st.caption(
+            "STOCK Act transactions can be disclosed up to 45 days after trading. Estimated values below use "
+            "the midpoint of each publicly reported amount range."
         )
+        if congress_df.empty:
+            st.info("No congressional disclosure data is available.")
+        else:
+            filter1, filter2, filter3, filter4 = st.columns([0.8, 1.1, 1.2, 1])
+            days = filter1.selectbox(
+                "Lookback",
+                [30, 90, 180, 365],
+                index=1,
+                format_func=lambda value: f"{value} days",
+                key="congress_days",
+            )
+            chambers = filter2.multiselect(
+                "Chamber",
+                sorted(congress_df["chamber"].dropna().unique()),
+                default=sorted(congress_df["chamber"].dropna().unique()),
+                key="congress_chambers",
+            )
+            sides = filter3.multiselect(
+                "Transaction",
+                ["Purchase", "Sale", "Exchange", "Other"],
+                default=["Purchase", "Sale"],
+                key="congress_sides",
+            )
+            ticker = filter4.text_input("Ticker", placeholder="NVDA", key="congress_ticker")
+            congress_display = filter_congress_trades(
+                congress_df,
+                days=days,
+                chambers=chambers,
+                sides=sides,
+                ticker=ticker,
+            )
+            summary = summarize_congress_trades(congress_display)
+            metrics = st.columns(5)
+            metrics[0].metric("Transactions", int(summary["trades"]))
+            metrics[1].metric("Active Tickers", int(summary["tickers"]))
+            metrics[2].metric("Estimated Buys", fmt_dollar_compact(summary["purchase_value"]))
+            metrics[3].metric("Estimated Sales", fmt_dollar_compact(summary["sale_value"]))
+            metrics[4].metric(
+                "Estimated Net",
+                fmt_dollar_compact(summary["net_value"]),
+                f"{summary['net_value']:+,.0f}",
+                delta_color="normal",
+            )
 
-    st.subheader("Corporate Insider Trades")
-    if insider_df.empty:
-        st.info("No SEC insider disclosure data is available.")
-    else:
-        filter1, filter2 = st.columns([1.2, 1])
-        sides = filter1.multiselect("Insider transaction", ["Purchase", "Sale"], default=["Purchase", "Sale"])
-        ticker = filter2.text_input("Insider ticker", placeholder="MSFT")
-        insider_display = filter_insider_trades(insider_df, sides=sides, ticker=ticker)
-        summary = summarize_insider_trades(insider_display)
-        metrics = st.columns(5)
-        metrics[0].metric("Buy Shares", f"{summary['purchase_shares']:,.0f}")
-        metrics[1].metric("Sell Shares", f"{summary['sale_shares']:,.0f}")
-        metrics[2].metric("Buy Value", fmt_dollar_compact(summary["purchase_value"]))
-        metrics[3].metric("Sell Value", fmt_dollar_compact(summary["sale_value"]))
-        metrics[4].metric("Net Value", fmt_dollar_compact(summary["net_value"]))
-        st.dataframe(
-            insider_display[INSIDER_DISPLAY_COLUMNS],
-            width="stretch",
-            hide_index=True,
-            column_config={"filing_url": st.column_config.LinkColumn("SEC Filing", display_text="Open filing")},
+            if congress_display.empty:
+                st.info("No congressional trades match the selected filters.")
+            else:
+                view = st.segmented_control(
+                    "Congress view",
+                    ["By Stock", "Transactions"],
+                    default="By Stock",
+                    label_visibility="collapsed",
+                )
+                if view == "Transactions":
+                    detail = congress_display.copy()
+                    today = pd.Timestamp.now().normalize()
+                    detail["days_ago"] = (today - detail["transaction_date"].dt.normalize()).dt.days
+                    detail["filing_date"] = detail["filing_date"].dt.strftime("%Y-%m-%d")
+                    detail["transaction_date"] = detail["transaction_date"].dt.strftime("%Y-%m-%d")
+                    detail_columns = [
+                        "transaction_date",
+                        "days_ago",
+                        "ticker",
+                        "trade_side",
+                        "amount_range_label",
+                        "filer_name",
+                        "chamber",
+                        "party",
+                        "state",
+                        "filing_date",
+                        "days_to_file",
+                        "doc_url",
+                    ]
+                    detail_styled = detail[detail_columns].style.map(
+                        disclosure_style,
+                        subset=["trade_side"],
+                    )
+                    st.dataframe(
+                        detail_styled,
+                        width="stretch",
+                        hide_index=True,
+                        column_config={
+                            "transaction_date": "Trade Date",
+                            "days_ago": "Days Ago",
+                            "ticker": "Ticker",
+                            "trade_side": "Side",
+                            "amount_range_label": "Reported Amount",
+                            "filer_name": "Member",
+                            "chamber": "Chamber",
+                            "party": "Party",
+                            "state": "State",
+                            "filing_date": "Filed",
+                            "days_to_file": st.column_config.NumberColumn("Filing Delay", format="%d days"),
+                            "doc_url": st.column_config.LinkColumn("Source", display_text="Open filing"),
+                        },
+                    )
+                else:
+                    stock_summary = aggregate_congress_by_ticker(congress_display)
+                    render_disclosure_activity_chart(
+                        stock_summary,
+                        value_column="estimated_net_value",
+                        title="Congressional Net Activity by Stock",
+                    )
+                    stock_summary["analysis_url"] = stock_summary["ticker"].map(
+                        lambda value: f"/stock-analysis?ticker={value}" if value in ALL_TICKERS else None
+                    )
+                    stock_summary["latest_trade"] = stock_summary["latest_trade"].dt.strftime("%Y-%m-%d")
+                    stock_columns = [
+                        "ticker",
+                        "signal",
+                        "trade_count",
+                        "purchases",
+                        "sales",
+                        "estimated_buy_value",
+                        "estimated_sale_value",
+                        "estimated_net_value",
+                        "filer_count",
+                        "latest_trade",
+                        "analysis_url",
+                    ]
+                    stock_styled = stock_summary[stock_columns].style.format(
+                        {
+                            "estimated_buy_value": "${:,.0f}",
+                            "estimated_sale_value": "${:,.0f}",
+                            "estimated_net_value": "${:+,.0f}",
+                        }
+                    ).map(disclosure_style, subset=["signal"]).map(
+                        net_value_style,
+                        subset=["estimated_net_value"],
+                    )
+                    st.dataframe(
+                        stock_styled,
+                        width="stretch",
+                        hide_index=True,
+                        column_config={
+                            "ticker": "Ticker",
+                            "signal": "Activity",
+                            "trade_count": "Trades",
+                            "purchases": "Buys",
+                            "sales": "Sales",
+                            "estimated_buy_value": "Estimated Buys",
+                            "estimated_sale_value": "Estimated Sales",
+                            "estimated_net_value": "Estimated Net",
+                            "filer_count": "Members",
+                            "latest_trade": "Latest Trade",
+                            "analysis_url": st.column_config.LinkColumn("Chart", display_text="Open analysis"),
+                        },
+                    )
+
+    with insider_tab:
+        st.caption(
+            "Only SEC Form 4/4-A open-market purchase and sale codes are included. Awards, exercises, gifts, "
+            "tax withholding, and Form 10-K filings are excluded."
         )
+        if insider_df.empty:
+            st.info("No SEC insider disclosure data is available.")
+        else:
+            filter1, filter2, filter3 = st.columns([1.2, 1, 1])
+            sides = filter1.multiselect(
+                "Transaction",
+                ["Purchase", "Sale"],
+                default=["Purchase", "Sale"],
+                key="insider_sides",
+            )
+            ticker = filter2.text_input("Ticker", placeholder="MSFT", key="insider_ticker")
+            minimum_value = filter3.selectbox(
+                "Minimum Value",
+                [0, 10_000, 50_000, 100_000, 500_000, 1_000_000],
+                format_func=fmt_dollar_compact,
+                key="insider_minimum_value",
+            )
+            insider_display = filter_insider_trades(insider_df, sides=sides, ticker=ticker)
+            insider_display = insider_display[insider_display["estimated_value"] >= minimum_value].reset_index(drop=True)
+            summary = summarize_insider_trades(insider_display)
+            metrics = st.columns(5)
+            metrics[0].metric("Transactions", int(summary["trades"]))
+            metrics[1].metric("Active Tickers", int(summary["tickers"]))
+            metrics[2].metric("Buy Value", fmt_dollar_compact(summary["purchase_value"]))
+            metrics[3].metric("Sale Value", fmt_dollar_compact(summary["sale_value"]))
+            metrics[4].metric(
+                "Net Insider Value",
+                fmt_dollar_compact(summary["net_value"]),
+                f"{summary['net_value']:+,.0f}",
+                delta_color="normal",
+            )
+
+            if insider_display.empty:
+                st.info("No open-market insider trades match the selected filters.")
+            else:
+                view = st.segmented_control(
+                    "Insider view",
+                    ["By Stock", "Transactions"],
+                    default="By Stock",
+                    label_visibility="collapsed",
+                )
+                if view == "Transactions":
+                    detail = insider_display.copy()
+                    today = pd.Timestamp.now(tz="UTC").normalize()
+                    detail["days_ago"] = (
+                        today - detail["transaction_date"].dt.tz_localize("UTC").dt.normalize()
+                    ).dt.days
+                    detail["transaction_date"] = detail["transaction_date"].dt.strftime("%Y-%m-%d")
+                    detail_columns = [
+                        "transaction_date",
+                        "days_ago",
+                        "ticker",
+                        "trade_side",
+                        "estimated_value",
+                        "owner_name",
+                        "role",
+                        "shares",
+                        "price_per_share",
+                        "shares_after",
+                        "filing_url",
+                    ]
+                    detail_styled = detail[detail_columns].style.format(
+                        {
+                            "estimated_value": "${:,.0f}",
+                            "shares": "{:,.0f}",
+                            "price_per_share": "${:,.2f}",
+                            "shares_after": "{:,.0f}",
+                        }
+                    ).map(disclosure_style, subset=["trade_side"])
+                    st.dataframe(
+                        detail_styled,
+                        width="stretch",
+                        hide_index=True,
+                        column_config={
+                            "transaction_date": "Trade Date",
+                            "days_ago": "Days Ago",
+                            "ticker": "Ticker",
+                            "trade_side": "Side",
+                            "estimated_value": "Estimated Value",
+                            "owner_name": "Insider",
+                            "role": "Role",
+                            "shares": "Shares",
+                            "price_per_share": "Price",
+                            "shares_after": "Holdings After",
+                            "filing_url": st.column_config.LinkColumn("Source", display_text="SEC filing"),
+                        },
+                    )
+                else:
+                    stock_summary = aggregate_insider_by_ticker(insider_display)
+                    render_disclosure_activity_chart(
+                        stock_summary,
+                        value_column="net_value",
+                        title="Corporate Insider Net Activity by Stock",
+                    )
+                    stock_summary["analysis_url"] = stock_summary["ticker"].map(
+                        lambda value: f"/stock-analysis?ticker={value}" if value in ALL_TICKERS else None
+                    )
+                    stock_summary["latest_trade"] = stock_summary["latest_trade"].dt.strftime("%Y-%m-%d")
+                    stock_columns = [
+                        "ticker",
+                        "signal",
+                        "trade_count",
+                        "purchases",
+                        "sales",
+                        "buy_value",
+                        "sale_value",
+                        "net_value",
+                        "insider_count",
+                        "latest_trade",
+                        "analysis_url",
+                    ]
+                    stock_styled = stock_summary[stock_columns].style.format(
+                        {
+                            "buy_value": "${:,.0f}",
+                            "sale_value": "${:,.0f}",
+                            "net_value": "${:+,.0f}",
+                        }
+                    ).map(disclosure_style, subset=["signal"]).map(
+                        net_value_style,
+                        subset=["net_value"],
+                    )
+                    st.dataframe(
+                        stock_styled,
+                        width="stretch",
+                        hide_index=True,
+                        column_config={
+                            "ticker": "Ticker",
+                            "signal": "Activity",
+                            "trade_count": "Trades",
+                            "purchases": "Buys",
+                            "sales": "Sales",
+                            "buy_value": "Buy Value",
+                            "sale_value": "Sale Value",
+                            "net_value": "Net Value",
+                            "insider_count": "Insiders",
+                            "latest_trade": "Latest Trade",
+                            "analysis_url": st.column_config.LinkColumn("Chart", display_text="Open analysis"),
+                        },
+                    )
+
+    st.caption(
+        "Disclosure data is delayed and should be treated as supporting context, not a real-time trading signal or financial advice."
+    )
 
 
 def research_page() -> None:
@@ -947,6 +1351,536 @@ def research_page() -> None:
         st.dataframe(context["bench_df"], width="stretch", hide_index=True)
 
 
+def stock_analysis_page() -> None:
+    render_page_header(
+        "Stock Analysis",
+        "Technical trends, valuation multiples, and dated institutional analyst price targets.",
+    )
+    try:
+        technical_data = load_technical_data(MARKET_DATA_VERSION)
+    except Exception as exc:
+        st.error(f"Could not load technical data: {exc}")
+        return
+
+    alerts = build_ma60_alerts(technical_data, tickers=ALL_TICKERS, recent_sessions=5)
+    if alerts.empty:
+        st.info("Technical alerts are unavailable because there is not enough daily price history.")
+        return
+
+    st.subheader("MA60 Risk Alerts")
+    st.caption(
+        "Quarterly line means the 60-session moving average. A new breakdown means price crossed below MA60 "
+        "during the latest five trading sessions and remains below it."
+    )
+    dangerous = alerts[alerts["below_ma60"]]
+    new_breakdowns = alerts[alerts["recent_breakdown"] & alerts["below_ma60"]]
+    weakest = alerts.iloc[alerts["distance_to_ma60_pct"].argmin()]
+    summary = st.columns(4)
+    summary[0].metric("New MA60 Breakdowns", len(new_breakdowns))
+    summary[1].metric("Below MA60", len(dangerous))
+    summary[2].metric("Universe", len(alerts))
+    summary[3].metric(
+        "Weakest vs MA60",
+        str(weakest["ticker"]),
+        fmt_pct(float(weakest["distance_to_ma60_pct"])),
+        delta_color="normal",
+    )
+
+    filter_col, search_col = st.columns([1.6, 1])
+    statuses = filter_col.multiselect(
+        "Alert status",
+        options=["New Breakdown", "Below MA60", "Above MA60"],
+        default=["New Breakdown", "Below MA60"],
+    )
+    ticker_search = search_col.text_input("Ticker search", placeholder="NVDA").strip().upper()
+    alert_display = alerts[alerts["status"].isin(statuses)].copy() if statuses else alerts.iloc[0:0].copy()
+    if ticker_search:
+        alert_display = alert_display[alert_display["ticker"].str.contains(ticker_search, regex=False)]
+    alert_display["analysis_url"] = alert_display["ticker"].map(lambda ticker: f"/stock-analysis?ticker={ticker}")
+    alert_display["cross_date"] = pd.to_datetime(alert_display["cross_date"]).dt.strftime("%Y-%m-%d").fillna("-")
+    alert_columns = [
+        "ticker",
+        "status",
+        "last_price",
+        "ma20",
+        "ma60",
+        "distance_to_ma60_pct",
+        "return_5d",
+        "return_20d",
+        "cross_date",
+        "analysis_url",
+    ]
+    alert_styled = alert_display[alert_columns].style.format(
+        {
+            "last_price": "${:,.2f}",
+            "ma20": "${:,.2f}",
+            "ma60": "${:,.2f}",
+            "distance_to_ma60_pct": "{:+.2f}%",
+            "return_5d": "{:+.2f}%",
+            "return_20d": "{:+.2f}%",
+        },
+        na_rep="-",
+    ).map(
+        lambda value: (
+            "color: #f85149; font-weight: 700"
+            if value in {"New Breakdown", "Below MA60"}
+            else "color: #3fb950; font-weight: 700"
+        ),
+        subset=["status"],
+    ).map(
+        lambda value: (
+            "color: #3fb950; font-weight: 700"
+            if pd.notna(value) and float(value) >= 0
+            else "color: #f85149; font-weight: 700"
+            if pd.notna(value)
+            else ""
+        ),
+        subset=["distance_to_ma60_pct", "return_5d", "return_20d"],
+    )
+    st.dataframe(
+        alert_styled,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "ticker": "Ticker",
+            "status": "MA60 Status",
+            "last_price": "Last",
+            "ma20": "MA20",
+            "ma60": "MA60",
+            "distance_to_ma60_pct": "vs MA60",
+            "return_5d": "5D",
+            "return_20d": "20D",
+            "cross_date": "Last Breakdown",
+            "analysis_url": st.column_config.LinkColumn("Detail", display_text="Open analysis"),
+        },
+    )
+
+    st.divider()
+    query_ticker = st.query_params.get("ticker", "")
+    if isinstance(query_ticker, list):
+        query_ticker = query_ticker[0] if query_ticker else ""
+    requested_ticker = str(query_ticker).upper()
+    default_ticker = requested_ticker if requested_ticker in ALL_TICKERS else "NVDA"
+    ticker_col, range_col = st.columns([1, 1.5])
+    selected_ticker = ticker_col.selectbox(
+        "Stock",
+        options=ALL_TICKERS,
+        index=ALL_TICKERS.index(default_ticker),
+    )
+    history_window = range_col.segmented_control(
+        "Chart range",
+        options=["3M", "6M", "1Y"],
+        default="6M",
+    )
+    if requested_ticker != selected_ticker:
+        st.query_params["ticker"] = selected_ticker
+
+    detail = build_stock_detail(technical_data, selected_ticker)
+    snapshot = stock_snapshot(detail)
+    if detail.empty or not snapshot:
+        st.warning(f"No daily technical data is available for {selected_ticker}.")
+        return
+
+    selected_alert = alerts[alerts["ticker"] == selected_ticker]
+    alert_status = str(selected_alert.iloc[0]["status"]) if not selected_alert.empty else "Unavailable"
+    status_color = "#f85149" if alert_status in {"New Breakdown", "Below MA60"} else "#3fb950"
+    st.markdown(
+        f"### {selected_ticker} <span style=\"color:{status_color}; font-size:1rem;\">{alert_status}</span>",
+        unsafe_allow_html=True,
+    )
+    metrics = st.columns(6)
+    metrics[0].metric("Last Price", fmt_price(snapshot["last_price"]), fmt_pct(snapshot["daily_return"]))
+    metrics[1].metric("vs MA20", fmt_pct(snapshot["ma20_gap"]))
+    metrics[2].metric("vs MA60", fmt_pct(snapshot["ma60_gap"]))
+    metrics[3].metric("RSI (14)", f"{snapshot['rsi14']:.1f}")
+    metrics[4].metric("20D Volatility", f"{snapshot['volatility_20d']:.1f}%")
+    metrics[5].metric("52W Drawdown", f"{snapshot['max_drawdown_52w']:.1f}%")
+    st.caption(
+        f"52-week range: {fmt_price(snapshot['low_52w'])} - {fmt_price(snapshot['high_52w'])}. "
+        "MA5 is the short-term line, MA20 is the monthly line, and MA60 is the quarterly line."
+    )
+
+    st.subheader("Valuation and Analyst Targets")
+    try:
+        valuation, target_history = load_analyst_data(selected_ticker)
+    except Exception as exc:
+        valuation, target_history = {}, pd.DataFrame()
+        st.warning(f"Valuation and analyst target data is temporarily unavailable: {exc}")
+
+    if valuation:
+        currency = str(valuation.get("currency") or "USD")
+        valuation_metrics = st.columns(6)
+        valuation_metrics[0].metric("Trailing P/E", fmt_optional_multiple(valuation.get("trailing_pe")))
+        valuation_metrics[1].metric("Forward P/E", fmt_optional_multiple(valuation.get("forward_pe")))
+        valuation_metrics[2].metric("Price / Sales", fmt_optional_multiple(valuation.get("price_to_sales")))
+        valuation_metrics[3].metric("Price / Book", fmt_optional_multiple(valuation.get("price_to_book")))
+        valuation_metrics[4].metric("EV / EBITDA", fmt_optional_multiple(valuation.get("enterprise_to_ebitda")))
+        valuation_metrics[5].metric("PEG Ratio", fmt_optional_multiple(valuation.get("peg_ratio")))
+
+        mean_target = valuation.get("target_mean")
+        median_target = valuation.get("target_median")
+        target_upside = (
+            (float(mean_target) / snapshot["last_price"] - 1) * 100
+            if mean_target is not None and snapshot["last_price"]
+            else None
+        )
+        target_metrics = st.columns(6)
+        target_metrics[0].metric("Consensus", valuation.get("recommendation") or "N/A")
+        target_metrics[1].metric("Analysts", int(valuation.get("analyst_count") or 0))
+        target_metrics[2].metric(
+            "Mean Target",
+            fmt_optional_price(mean_target, currency),
+            None if target_upside is None else fmt_pct(target_upside),
+        )
+        target_metrics[3].metric("Median Target", fmt_optional_price(median_target, currency))
+        target_metrics[4].metric("Low Target", fmt_optional_price(valuation.get("target_low"), currency))
+        target_metrics[5].metric("High Target", fmt_optional_price(valuation.get("target_high"), currency))
+
+    stock_themes = themes_for_ticker(selected_ticker)
+    if stock_themes:
+        st.markdown("#### P/E Compared with Theme Peers")
+        peer_theme = st.selectbox(
+            "Comparison theme",
+            options=stock_themes,
+            key=f"peer_theme_{selected_ticker}",
+        )
+        try:
+            peer_valuations = load_peer_valuation_data(selected_ticker, peer_theme)
+        except Exception as exc:
+            peer_valuations = pd.DataFrame()
+            st.warning(f"Peer valuation data is temporarily unavailable: {exc}")
+
+        if peer_valuations.empty:
+            st.info("No comparable P/E data is available for this theme.")
+        else:
+            peer_summary = pe_comparison_summary(peer_valuations, selected_ticker)
+            peer_metrics = st.columns(5)
+            peer_metrics[0].metric("Theme", peer_theme)
+            peer_metrics[1].metric("Compared Stocks", int(peer_summary["peer_count"] or 0))
+            peer_metrics[2].metric(
+                "Trailing P/E",
+                fmt_optional_multiple(peer_summary["trailing_pe"]),
+                (
+                    None
+                    if peer_summary["trailing_premium_pct"] is None
+                    else f"{peer_summary['trailing_premium_pct']:+.1f}% vs median"
+                ),
+                delta_color="inverse",
+            )
+            peer_metrics[3].metric(
+                "Theme Median",
+                fmt_optional_multiple(peer_summary["trailing_median"]),
+            )
+            peer_metrics[4].metric(
+                "Forward P/E",
+                fmt_optional_multiple(peer_summary["forward_pe"]),
+                (
+                    None
+                    if peer_summary["forward_premium_pct"] is None
+                    else f"{peer_summary['forward_premium_pct']:+.1f}% vs median"
+                ),
+                delta_color="inverse",
+            )
+
+            peer_chart_data = peer_valuations.melt(
+                id_vars=["ticker", "selected"],
+                value_vars=["trailing_pe", "forward_pe"],
+                var_name="pe_type",
+                value_name="pe",
+            )
+            peer_chart_data = peer_chart_data[pd.to_numeric(peer_chart_data["pe"], errors="coerce") > 0]
+            peer_chart_data["pe_type"] = peer_chart_data["pe_type"].map(
+                {"trailing_pe": "Trailing P/E", "forward_pe": "Forward P/E"}
+            )
+            if not peer_chart_data.empty:
+                ticker_order = (
+                    peer_valuations.assign(
+                        _sort=pd.to_numeric(peer_valuations["forward_pe"], errors="coerce").fillna(float("inf"))
+                    )
+                    .sort_values("_sort")["ticker"]
+                    .tolist()
+                )
+                peer_chart = px.bar(
+                    peer_chart_data,
+                    x="ticker",
+                    y="pe",
+                    color="pe_type",
+                    barmode="group",
+                    category_orders={"ticker": ticker_order},
+                    color_discrete_map={
+                        "Trailing P/E": "#58a6ff",
+                        "Forward P/E": "#d29922",
+                    },
+                    title=f"{peer_theme} P/E Comparison",
+                )
+                peer_chart.update_layout(
+                    template="plotly_dark",
+                    paper_bgcolor="#0b0f14",
+                    plot_bgcolor="#0b0f14",
+                    height=430,
+                    xaxis_title="",
+                    yaxis_title="P/E Multiple",
+                    legend_title="",
+                    margin={"l": 20, "r": 20, "t": 55, "b": 30},
+                )
+                st.plotly_chart(peer_chart, width="stretch")
+
+            peer_display = peer_valuations.copy()
+            peer_display["position"] = peer_display["selected"].map(
+                lambda value: "Selected Stock" if value else "Peer"
+            )
+            peer_display["analysis_url"] = peer_display["ticker"].map(stock_analysis_url)
+            peer_columns = [
+                "ticker",
+                "position",
+                "company",
+                "trailing_pe",
+                "forward_pe",
+                "earnings_growth_pct",
+                "revenue_growth_pct",
+                "market_cap",
+                "analysis_url",
+            ]
+            peer_styled = peer_display[peer_columns].style.format(
+                {
+                    "trailing_pe": "{:.1f}x",
+                    "forward_pe": "{:.1f}x",
+                    "earnings_growth_pct": "{:+.1f}%",
+                    "revenue_growth_pct": "{:+.1f}%",
+                    "market_cap": "${:,.0f}",
+                },
+                na_rep="N/A",
+            ).map(
+                lambda value: "color: #58a6ff; font-weight: 700" if value == "Selected Stock" else "",
+                subset=["position"],
+            )
+            st.dataframe(
+                peer_styled,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "ticker": "Ticker",
+                    "position": "Group",
+                    "company": "Company",
+                    "trailing_pe": "Trailing P/E",
+                    "forward_pe": "Forward P/E",
+                    "earnings_growth_pct": "Earnings Growth",
+                    "revenue_growth_pct": "Revenue Growth",
+                    "market_cap": "Market Cap",
+                    "analysis_url": st.column_config.LinkColumn("Analysis", display_text="Open chart"),
+                },
+            )
+            st.caption(
+                "Theme median uses only positive P/E values. Negative or missing P/E usually means earnings are "
+                "negative or Yahoo Finance has no valid multiple, so those values are excluded from the median."
+            )
+
+    if target_history.empty:
+        st.info("No dated institutional price-target records are available for this ticker.")
+    else:
+        display_count = st.segmented_control(
+            "Institution records",
+            options=[10, 25, 50],
+            default=25,
+            format_func=lambda value: f"Latest {value}",
+        )
+        analyst_display = target_history.head(int(display_count or 25)).copy()
+        latest_by_firm = analyst_display.drop_duplicates("firm").head(15).sort_values("price_target")
+        target_chart = px.scatter(
+            latest_by_firm,
+            x="price_target",
+            y="firm",
+            color="upside_pct",
+            color_continuous_scale=["#f85149", "#d29922", "#3fb950"],
+            color_continuous_midpoint=0,
+            hover_data={
+                "estimate_date": "|%Y-%m-%d",
+                "rating": True,
+                "target_action": True,
+                "price_target": ":.2f",
+                "upside_pct": ":.2f",
+            },
+            title="Latest Available Target by Institution",
+        )
+        target_chart.add_vline(
+            x=snapshot["last_price"],
+            line_dash="dash",
+            line_color="#e6edf3",
+            annotation_text="Current price",
+        )
+        target_chart.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="#0b0f14",
+            plot_bgcolor="#0b0f14",
+            height=max(380, len(latest_by_firm) * 30),
+            coloraxis_colorbar_title="Upside %",
+            xaxis_title=f"Price Target ({valuation.get('currency', 'USD') if valuation else 'USD'})",
+            yaxis_title="",
+            margin={"l": 20, "r": 20, "t": 55, "b": 30},
+        )
+        st.plotly_chart(target_chart, width="stretch")
+
+        analyst_display["estimate_date"] = analyst_display["estimate_date"].dt.strftime("%Y-%m-%d")
+        analyst_styled = analyst_display.style.format(
+            {
+                "price_target": "${:,.2f}",
+                "prior_price_target": "${:,.2f}",
+                "target_change_pct": "{:+.2f}%",
+                "upside_pct": "{:+.2f}%",
+            },
+            na_rep="-",
+        ).map(
+            lambda value: (
+                "color: #3fb950; font-weight: 700"
+                if pd.notna(value) and float(value) >= 0
+                else "color: #f85149; font-weight: 700"
+                if pd.notna(value)
+                else ""
+            ),
+            subset=["target_change_pct", "upside_pct"],
+        )
+        st.dataframe(
+            analyst_styled,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "estimate_date": "Estimate Date",
+                "firm": "Institution",
+                "rating": "Rating",
+                "action": "Rating Action",
+                "target_action": "Target Action",
+                "price_target": "Price Target",
+                "prior_price_target": "Prior Target",
+                "target_change_pct": "Target Change",
+                "upside_pct": "vs Current",
+            },
+        )
+        st.caption(
+            "Source: Yahoo Finance analyst price-target and upgrade/downgrade history. Estimate Date is the "
+            "recorded analyst action date, not the time this dashboard fetched the data. Coverage may be delayed or incomplete."
+        )
+
+    sessions = {"3M": 66, "6M": 132, "1Y": 252}
+    chart_data = detail.tail(sessions.get(str(history_window), 132))
+    price_chart = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.04,
+        row_heights=[0.76, 0.24],
+    )
+    if {"open", "high", "low", "close"}.issubset(chart_data.columns):
+        price_chart.add_trace(
+            go.Candlestick(
+                x=chart_data.index,
+                open=chart_data["open"],
+                high=chart_data["high"],
+                low=chart_data["low"],
+                close=chart_data["close"],
+                name="Daily",
+                increasing_line_color="#3fb950",
+                decreasing_line_color="#f85149",
+            ),
+            row=1,
+            col=1,
+        )
+    else:
+        price_chart.add_trace(
+            go.Scatter(x=chart_data.index, y=chart_data["close"], name="Close", line_color="#e6edf3"),
+            row=1,
+            col=1,
+        )
+    for column, label, color in [
+        ("ma5", "MA5", "#58a6ff"),
+        ("ma20", "MA20", "#d29922"),
+        ("ma60", "MA60", "#bc8cff"),
+    ]:
+        price_chart.add_trace(
+            go.Scatter(x=chart_data.index, y=chart_data[column], name=label, line={"color": color, "width": 1.6}),
+            row=1,
+            col=1,
+        )
+    volume_colors = ["#3fb950" if close >= open_price else "#f85149" for close, open_price in zip(
+        chart_data["close"],
+        chart_data.get("open", chart_data["close"]),
+        strict=False,
+    )]
+    price_chart.add_trace(
+        go.Bar(x=chart_data.index, y=chart_data.get("volume"), name="Volume", marker_color=volume_colors),
+        row=2,
+        col=1,
+    )
+    price_chart.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        height=650,
+        margin={"l": 20, "r": 20, "t": 35, "b": 20},
+        xaxis_rangeslider_visible=False,
+        legend={"orientation": "h", "y": 1.02, "x": 0},
+        hovermode="x unified",
+    )
+    price_chart.update_yaxes(title_text="Price", row=1, col=1)
+    price_chart.update_yaxes(title_text="Volume", row=2, col=1)
+    st.plotly_chart(price_chart, width="stretch")
+
+    rsi_col, macd_col = st.columns(2)
+    with rsi_col:
+        rsi_chart = go.Figure(go.Scatter(
+            x=chart_data.index,
+            y=chart_data["rsi14"],
+            line_color="#58a6ff",
+            name="RSI (14)",
+        ))
+        rsi_chart.add_hline(y=70, line_dash="dash", line_color="#f85149")
+        rsi_chart.add_hline(y=30, line_dash="dash", line_color="#3fb950")
+        rsi_chart.update_layout(
+            title="RSI (14)",
+            template="plotly_dark",
+            paper_bgcolor="#0b0f14",
+            plot_bgcolor="#0b0f14",
+            height=300,
+            yaxis_range=[0, 100],
+            margin={"l": 20, "r": 20, "t": 45, "b": 20},
+        )
+        st.plotly_chart(rsi_chart, width="stretch")
+    with macd_col:
+        histogram_colors = chart_data["macd_histogram"].map(lambda value: "#3fb950" if value >= 0 else "#f85149")
+        macd_chart = go.Figure()
+        macd_chart.add_trace(go.Bar(
+            x=chart_data.index,
+            y=chart_data["macd_histogram"],
+            marker_color=histogram_colors,
+            name="Histogram",
+        ))
+        macd_chart.add_trace(go.Scatter(
+            x=chart_data.index,
+            y=chart_data["macd"],
+            line_color="#58a6ff",
+            name="MACD",
+        ))
+        macd_chart.add_trace(go.Scatter(
+            x=chart_data.index,
+            y=chart_data["macd_signal"],
+            line_color="#d29922",
+            name="Signal",
+        ))
+        macd_chart.update_layout(
+            title="MACD (12, 26, 9)",
+            template="plotly_dark",
+            paper_bgcolor="#0b0f14",
+            plot_bgcolor="#0b0f14",
+            height=300,
+            margin={"l": 20, "r": 20, "t": 45, "b": 20},
+        )
+        st.plotly_chart(macd_chart, width="stretch")
+
+    st.caption(
+        "Technical indicators use adjusted Yahoo Finance daily prices and may be delayed or incomplete. "
+        "This is a research alert, not financial advice."
+    )
+
+
 def main() -> None:
     configure_auto_refresh()
 
@@ -1085,7 +2019,7 @@ def main() -> None:
                 f"""
                 <div class="flow-card">
                     <div class="small-label">#{index} Integrated</div>
-                    <h3 style="margin: 0.2rem 0 0.1rem 0;">{candidate["ticker"]}</h3>
+                    <h3 style="margin: 0.2rem 0 0.1rem 0;"><a class="stock-analysis-link" href="{stock_analysis_url(candidate["ticker"])}" target="_self">{candidate["ticker"]}</a></h3>
                     <div class="small-label">{candidate["themes"]}</div>
                     <p style="font-size: 1.35rem; margin: 0.6rem 0 0.2rem 0;">{float(candidate["integrated_score"]):.1f}</p>
                     <div class="small-label">Integrated score</div>
@@ -1097,15 +2031,17 @@ def main() -> None:
                         <span class="small-label">{int(candidate["congress_buys"])}B/{int(candidate["congress_sales"])}S Congress · {int(candidate["insider_buys"])}B/{int(candidate["insider_sales"])}S insider</span>
                         <span class="exit-signal {rating_class(rating)}">{rating}</span>
                     </div>
+                    <a class="analysis-action" href="{stock_analysis_url(candidate["ticker"])}" target="_self">View technical analysis</a>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
-    integrated_display = pd.DataFrame(integrated_recommendations)
+    integrated_display = add_stock_analysis_links(pd.DataFrame(integrated_recommendations))
     if not integrated_display.empty:
         integrated_columns = [
             "ticker",
+            "analysis_url",
             "themes",
             "integrated_score",
             "rating",
@@ -1144,7 +2080,14 @@ def main() -> None:
             }.get(value, ""),
             subset=["rating"],
         )
-        st.dataframe(integrated_styled, width="stretch", hide_index=True)
+        st.dataframe(
+            integrated_styled,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "analysis_url": st.column_config.LinkColumn("Analysis", display_text="Open chart"),
+            },
+        )
 
     st.subheader("Top 5 5m Breakout Candidates")
     if intraday_breakout_candidates:
@@ -1159,7 +2102,7 @@ def main() -> None:
                     f"""
                     <div class="flow-card">
                         <div class="small-label">#{index} 5m Breakout</div>
-                        <h3 style="margin: 0.2rem 0 0.1rem 0;">{candidate["ticker"]}</h3>
+                        <h3 style="margin: 0.2rem 0 0.1rem 0;"><a class="stock-analysis-link" href="{stock_analysis_url(candidate["ticker"])}" target="_self">{candidate["ticker"]}</a></h3>
                         <div class="small-label">{candidate["themes"]}</div>
                         <p style="font-size: 1.35rem; margin: 0.6rem 0 0.2rem 0;">{float(candidate["breakout_score"]):.1f}</p>
                         <div class="small-label">5m breakout score</div>
@@ -1566,6 +2509,7 @@ if __name__ == "__main__":
                 st.Page(signals_page, title="Signals", url_path="signals"),
             ],
             "Research": [
+                st.Page(stock_analysis_page, title="Stock Analysis", url_path="stock-analysis"),
                 st.Page(disclosures_page, title="Disclosures", url_path="disclosures"),
                 st.Page(research_page, title="Market Research", url_path="research"),
                 st.Page(main, title="Full Dashboard", url_path="full-dashboard"),
