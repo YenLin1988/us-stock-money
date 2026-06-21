@@ -141,8 +141,14 @@ The Stock Analysis page scans the tracked universe for quarterly-line risk:
 - links each alert to a per-stock daily candlestick chart
 - overlays MA5, MA20 monthly line, and MA60 quarterly line
 - includes volume, RSI (14), MACD (12/26/9), 20-day annualized volatility, 52-week range, and drawdown
+- shows trailing and forward P/E plus common valuation multiples
+- compares trailing and forward P/E with other tracked stocks in the same theme
+- shows theme medians and the selected stock's valuation premium or discount
+- shows consensus high, low, mean, and median analyst targets
+- lists dated institutional target-price actions with firm, rating, prior target, and upside versus current price
 
 Daily prices come from Yahoo Finance and can be delayed, incomplete, or adjusted after corporate actions.
+Analyst target history also comes from Yahoo Finance and may not include every institution or report.
 
 ## 5m Intraday Market Monitor
 

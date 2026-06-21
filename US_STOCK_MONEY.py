@@ -11,6 +11,12 @@ import streamlit.components.v1 as components
 from plotly.subplots import make_subplots
 
 from us_stock_money import scoring as scoring_module
+from us_stock_money.analyst_data import (
+    download_analyst_data,
+    download_peer_valuations,
+    pe_comparison_summary,
+    themes_for_ticker,
+)
 from us_stock_money.alerts import evaluate_alerts
 from us_stock_money.congress_trades import (
     DISPLAY_COLUMNS,
@@ -168,6 +174,16 @@ def load_technical_data(market_data_version: str) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600)
+def load_analyst_data(ticker: str) -> tuple[dict[str, object], pd.DataFrame]:
+    return download_analyst_data(ticker)
+
+
+@st.cache_data(ttl=3600)
+def load_peer_valuation_data(ticker: str, theme: str) -> pd.DataFrame:
+    return download_peer_valuations(ticker, theme)
+
+
+@st.cache_data(ttl=3600)
 def load_congress_trade_data() -> pd.DataFrame:
     return download_congress_trades()
 
@@ -215,6 +231,17 @@ def pct_color_class(value: float) -> str:
 
 def fmt_price(value: float) -> str:
     return f"${value:,.2f}"
+
+
+def fmt_optional_multiple(value: object) -> str:
+    return "N/A" if value is None or pd.isna(value) else f"{float(value):.1f}x"
+
+
+def fmt_optional_price(value: object, currency: str = "USD") -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
+    prefix = "$" if currency == "USD" else f"{currency} "
+    return f"{prefix}{float(value):,.2f}"
 
 
 def stock_analysis_url(ticker: object) -> str:
@@ -1326,8 +1353,8 @@ def research_page() -> None:
 
 def stock_analysis_page() -> None:
     render_page_header(
-        "Stock Technical Analysis",
-        "MA60 breakdown alerts and daily price analysis with MA5, MA20, MA60, volume, RSI, and MACD.",
+        "Stock Analysis",
+        "Technical trends, valuation multiples, and dated institutional analyst price targets.",
     )
     try:
         technical_data = load_technical_data(MARKET_DATA_VERSION)
@@ -1472,6 +1499,266 @@ def stock_analysis_page() -> None:
         f"52-week range: {fmt_price(snapshot['low_52w'])} - {fmt_price(snapshot['high_52w'])}. "
         "MA5 is the short-term line, MA20 is the monthly line, and MA60 is the quarterly line."
     )
+
+    st.subheader("Valuation and Analyst Targets")
+    try:
+        valuation, target_history = load_analyst_data(selected_ticker)
+    except Exception as exc:
+        valuation, target_history = {}, pd.DataFrame()
+        st.warning(f"Valuation and analyst target data is temporarily unavailable: {exc}")
+
+    if valuation:
+        currency = str(valuation.get("currency") or "USD")
+        valuation_metrics = st.columns(6)
+        valuation_metrics[0].metric("Trailing P/E", fmt_optional_multiple(valuation.get("trailing_pe")))
+        valuation_metrics[1].metric("Forward P/E", fmt_optional_multiple(valuation.get("forward_pe")))
+        valuation_metrics[2].metric("Price / Sales", fmt_optional_multiple(valuation.get("price_to_sales")))
+        valuation_metrics[3].metric("Price / Book", fmt_optional_multiple(valuation.get("price_to_book")))
+        valuation_metrics[4].metric("EV / EBITDA", fmt_optional_multiple(valuation.get("enterprise_to_ebitda")))
+        valuation_metrics[5].metric("PEG Ratio", fmt_optional_multiple(valuation.get("peg_ratio")))
+
+        mean_target = valuation.get("target_mean")
+        median_target = valuation.get("target_median")
+        target_upside = (
+            (float(mean_target) / snapshot["last_price"] - 1) * 100
+            if mean_target is not None and snapshot["last_price"]
+            else None
+        )
+        target_metrics = st.columns(6)
+        target_metrics[0].metric("Consensus", valuation.get("recommendation") or "N/A")
+        target_metrics[1].metric("Analysts", int(valuation.get("analyst_count") or 0))
+        target_metrics[2].metric(
+            "Mean Target",
+            fmt_optional_price(mean_target, currency),
+            None if target_upside is None else fmt_pct(target_upside),
+        )
+        target_metrics[3].metric("Median Target", fmt_optional_price(median_target, currency))
+        target_metrics[4].metric("Low Target", fmt_optional_price(valuation.get("target_low"), currency))
+        target_metrics[5].metric("High Target", fmt_optional_price(valuation.get("target_high"), currency))
+
+    stock_themes = themes_for_ticker(selected_ticker)
+    if stock_themes:
+        st.markdown("#### P/E Compared with Theme Peers")
+        peer_theme = st.selectbox(
+            "Comparison theme",
+            options=stock_themes,
+            key=f"peer_theme_{selected_ticker}",
+        )
+        try:
+            peer_valuations = load_peer_valuation_data(selected_ticker, peer_theme)
+        except Exception as exc:
+            peer_valuations = pd.DataFrame()
+            st.warning(f"Peer valuation data is temporarily unavailable: {exc}")
+
+        if peer_valuations.empty:
+            st.info("No comparable P/E data is available for this theme.")
+        else:
+            peer_summary = pe_comparison_summary(peer_valuations, selected_ticker)
+            peer_metrics = st.columns(5)
+            peer_metrics[0].metric("Theme", peer_theme)
+            peer_metrics[1].metric("Compared Stocks", int(peer_summary["peer_count"] or 0))
+            peer_metrics[2].metric(
+                "Trailing P/E",
+                fmt_optional_multiple(peer_summary["trailing_pe"]),
+                (
+                    None
+                    if peer_summary["trailing_premium_pct"] is None
+                    else f"{peer_summary['trailing_premium_pct']:+.1f}% vs median"
+                ),
+                delta_color="inverse",
+            )
+            peer_metrics[3].metric(
+                "Theme Median",
+                fmt_optional_multiple(peer_summary["trailing_median"]),
+            )
+            peer_metrics[4].metric(
+                "Forward P/E",
+                fmt_optional_multiple(peer_summary["forward_pe"]),
+                (
+                    None
+                    if peer_summary["forward_premium_pct"] is None
+                    else f"{peer_summary['forward_premium_pct']:+.1f}% vs median"
+                ),
+                delta_color="inverse",
+            )
+
+            peer_chart_data = peer_valuations.melt(
+                id_vars=["ticker", "selected"],
+                value_vars=["trailing_pe", "forward_pe"],
+                var_name="pe_type",
+                value_name="pe",
+            )
+            peer_chart_data = peer_chart_data[pd.to_numeric(peer_chart_data["pe"], errors="coerce") > 0]
+            peer_chart_data["pe_type"] = peer_chart_data["pe_type"].map(
+                {"trailing_pe": "Trailing P/E", "forward_pe": "Forward P/E"}
+            )
+            if not peer_chart_data.empty:
+                ticker_order = (
+                    peer_valuations.assign(
+                        _sort=pd.to_numeric(peer_valuations["forward_pe"], errors="coerce").fillna(float("inf"))
+                    )
+                    .sort_values("_sort")["ticker"]
+                    .tolist()
+                )
+                peer_chart = px.bar(
+                    peer_chart_data,
+                    x="ticker",
+                    y="pe",
+                    color="pe_type",
+                    barmode="group",
+                    category_orders={"ticker": ticker_order},
+                    color_discrete_map={
+                        "Trailing P/E": "#58a6ff",
+                        "Forward P/E": "#d29922",
+                    },
+                    title=f"{peer_theme} P/E Comparison",
+                )
+                peer_chart.update_layout(
+                    template="plotly_dark",
+                    paper_bgcolor="#0b0f14",
+                    plot_bgcolor="#0b0f14",
+                    height=430,
+                    xaxis_title="",
+                    yaxis_title="P/E Multiple",
+                    legend_title="",
+                    margin={"l": 20, "r": 20, "t": 55, "b": 30},
+                )
+                st.plotly_chart(peer_chart, width="stretch")
+
+            peer_display = peer_valuations.copy()
+            peer_display["position"] = peer_display["selected"].map(
+                lambda value: "Selected Stock" if value else "Peer"
+            )
+            peer_display["analysis_url"] = peer_display["ticker"].map(stock_analysis_url)
+            peer_columns = [
+                "ticker",
+                "position",
+                "company",
+                "trailing_pe",
+                "forward_pe",
+                "earnings_growth_pct",
+                "revenue_growth_pct",
+                "market_cap",
+                "analysis_url",
+            ]
+            peer_styled = peer_display[peer_columns].style.format(
+                {
+                    "trailing_pe": "{:.1f}x",
+                    "forward_pe": "{:.1f}x",
+                    "earnings_growth_pct": "{:+.1f}%",
+                    "revenue_growth_pct": "{:+.1f}%",
+                    "market_cap": "${:,.0f}",
+                },
+                na_rep="N/A",
+            ).map(
+                lambda value: "color: #58a6ff; font-weight: 700" if value == "Selected Stock" else "",
+                subset=["position"],
+            )
+            st.dataframe(
+                peer_styled,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "ticker": "Ticker",
+                    "position": "Group",
+                    "company": "Company",
+                    "trailing_pe": "Trailing P/E",
+                    "forward_pe": "Forward P/E",
+                    "earnings_growth_pct": "Earnings Growth",
+                    "revenue_growth_pct": "Revenue Growth",
+                    "market_cap": "Market Cap",
+                    "analysis_url": st.column_config.LinkColumn("Analysis", display_text="Open chart"),
+                },
+            )
+            st.caption(
+                "Theme median uses only positive P/E values. Negative or missing P/E usually means earnings are "
+                "negative or Yahoo Finance has no valid multiple, so those values are excluded from the median."
+            )
+
+    if target_history.empty:
+        st.info("No dated institutional price-target records are available for this ticker.")
+    else:
+        display_count = st.segmented_control(
+            "Institution records",
+            options=[10, 25, 50],
+            default=25,
+            format_func=lambda value: f"Latest {value}",
+        )
+        analyst_display = target_history.head(int(display_count or 25)).copy()
+        latest_by_firm = analyst_display.drop_duplicates("firm").head(15).sort_values("price_target")
+        target_chart = px.scatter(
+            latest_by_firm,
+            x="price_target",
+            y="firm",
+            color="upside_pct",
+            color_continuous_scale=["#f85149", "#d29922", "#3fb950"],
+            color_continuous_midpoint=0,
+            hover_data={
+                "estimate_date": "|%Y-%m-%d",
+                "rating": True,
+                "target_action": True,
+                "price_target": ":.2f",
+                "upside_pct": ":.2f",
+            },
+            title="Latest Available Target by Institution",
+        )
+        target_chart.add_vline(
+            x=snapshot["last_price"],
+            line_dash="dash",
+            line_color="#e6edf3",
+            annotation_text="Current price",
+        )
+        target_chart.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="#0b0f14",
+            plot_bgcolor="#0b0f14",
+            height=max(380, len(latest_by_firm) * 30),
+            coloraxis_colorbar_title="Upside %",
+            xaxis_title=f"Price Target ({valuation.get('currency', 'USD') if valuation else 'USD'})",
+            yaxis_title="",
+            margin={"l": 20, "r": 20, "t": 55, "b": 30},
+        )
+        st.plotly_chart(target_chart, width="stretch")
+
+        analyst_display["estimate_date"] = analyst_display["estimate_date"].dt.strftime("%Y-%m-%d")
+        analyst_styled = analyst_display.style.format(
+            {
+                "price_target": "${:,.2f}",
+                "prior_price_target": "${:,.2f}",
+                "target_change_pct": "{:+.2f}%",
+                "upside_pct": "{:+.2f}%",
+            },
+            na_rep="-",
+        ).map(
+            lambda value: (
+                "color: #3fb950; font-weight: 700"
+                if pd.notna(value) and float(value) >= 0
+                else "color: #f85149; font-weight: 700"
+                if pd.notna(value)
+                else ""
+            ),
+            subset=["target_change_pct", "upside_pct"],
+        )
+        st.dataframe(
+            analyst_styled,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "estimate_date": "Estimate Date",
+                "firm": "Institution",
+                "rating": "Rating",
+                "action": "Rating Action",
+                "target_action": "Target Action",
+                "price_target": "Price Target",
+                "prior_price_target": "Prior Target",
+                "target_change_pct": "Target Change",
+                "upside_pct": "vs Current",
+            },
+        )
+        st.caption(
+            "Source: Yahoo Finance analyst price-target and upgrade/downgrade history. Estimate Date is the "
+            "recorded analyst action date, not the time this dashboard fetched the data. Coverage may be delayed or incomplete."
+        )
 
     sessions = {"3M": 66, "6M": 132, "1Y": 252}
     chart_data = detail.tail(sessions.get(str(history_window), 132))
