@@ -25,11 +25,14 @@ from us_stock_money.congress_trades import (
     filter_congress_trades,
     summarize_congress_trades,
 )
+from us_stock_money.dark_pool import add_market_context, build_ats_anomalies, download_ats_weekly_activity
 from us_stock_money.insider_trades import (
     DISPLAY_COLUMNS as INSIDER_DISPLAY_COLUMNS,
     aggregate_insider_by_ticker,
     download_insider_trades,
+    download_ticker_insider_trades,
     filter_insider_trades,
+    normalize_insider_trades,
     summarize_insider_trades,
 )
 from us_stock_money.market_data import (
@@ -183,6 +186,11 @@ def load_peer_valuation_data(ticker: str, theme: str) -> pd.DataFrame:
     return download_peer_valuations(ticker, theme)
 
 
+@st.cache_data(ttl=21600)
+def load_ats_activity_data(market_data_version: str) -> pd.DataFrame:
+    return download_ats_weekly_activity(ALL_TICKERS)
+
+
 @st.cache_data(ttl=3600)
 def load_congress_trade_data() -> pd.DataFrame:
     return download_congress_trades()
@@ -191,6 +199,11 @@ def load_congress_trade_data() -> pd.DataFrame:
 @st.cache_data(ttl=3600)
 def load_insider_trade_data() -> pd.DataFrame:
     return download_insider_trades()
+
+
+@st.cache_data(ttl=3600)
+def load_ticker_insider_trade_data(ticker: str) -> pd.DataFrame:
+    return download_ticker_insider_trades(ticker)
 
 
 def fmt_pct(value: float) -> str:
@@ -304,6 +317,20 @@ def fmt_dollar_compact(value: float) -> str:
     if absolute >= 1_000:
         return f"${value / 1_000:,.1f}K"
     return f"${value:,.0f}"
+
+
+def insider_value_display(value: float, currencies: set[str]) -> str:
+    currencies = {currency for currency in currencies if currency}
+    if currencies == {"USD"} or not currencies:
+        return fmt_dollar_compact(value)
+    if currencies == {"EUR"}:
+        absolute = abs(value)
+        if absolute >= 1_000_000:
+            return f"EUR {value / 1_000_000:,.2f}M"
+        if absolute >= 1_000:
+            return f"EUR {value / 1_000:,.1f}K"
+        return f"EUR {value:,.0f}"
+    return "Mixed currencies"
 
 
 def disclosure_style(value: object) -> str:
@@ -938,7 +965,15 @@ def disclosures_page() -> None:
             )
 
             if congress_display.empty:
-                st.info("No congressional trades match the selected filters.")
+                if ticker:
+                    coverage_start = congress_df["transaction_date"].min()
+                    coverage_end = congress_df["transaction_date"].max()
+                    st.info(
+                        f"No congressional trades for {ticker.upper()} were found in the current source data "
+                        f"from {coverage_start:%Y-%m-%d} through {coverage_end:%Y-%m-%d}."
+                    )
+                else:
+                    st.info("No congressional trades match the selected filters.")
             else:
                 view = st.segmented_control(
                     "Congress view",
@@ -1044,8 +1079,9 @@ def disclosures_page() -> None:
 
     with insider_tab:
         st.caption(
-            "Only SEC Form 4/4-A open-market purchase and sale codes are included. Awards, exercises, gifts, "
-            "tax withholding, and Form 10-K filings are excluded."
+            "U.S. issuers use SEC Form 4/4-A open-market purchase and sale codes. Nokia manager transactions "
+            "are supplemented from Nokia's official EU Market Abuse Regulation Article 19 releases. "
+            "SEC awards, exercises, gifts, tax withholding, and Form 10-K filings are excluded."
         )
         if insider_df.empty:
             st.info("No SEC insider disclosure data is available.")
@@ -1064,24 +1100,48 @@ def disclosures_page() -> None:
                 format_func=fmt_dollar_compact,
                 key="insider_minimum_value",
             )
-            insider_display = filter_insider_trades(insider_df, sides=sides, ticker=ticker)
+            insider_source = insider_df
+            ticker_symbol = ticker.strip().upper()
+            if ticker_symbol in ALL_TICKERS:
+                try:
+                    ticker_supplement = load_ticker_insider_trade_data(ticker_symbol)
+                    if not ticker_supplement.empty:
+                        insider_source = normalize_insider_trades(
+                            pd.concat([insider_df, ticker_supplement], ignore_index=True).to_dict("records")
+                        )
+                except Exception as exc:
+                    st.warning(f"Ticker-specific insider data is temporarily unavailable: {exc}")
+            insider_display = filter_insider_trades(insider_source, sides=sides, ticker=ticker)
             insider_display = insider_display[insider_display["estimated_value"] >= minimum_value].reset_index(drop=True)
             summary = summarize_insider_trades(insider_display)
+            currencies = set(insider_display["currency"].dropna().astype(str)) if "currency" in insider_display else set()
+            mixed_currencies = len({currency for currency in currencies if currency}) > 1
             metrics = st.columns(5)
             metrics[0].metric("Transactions", int(summary["trades"]))
             metrics[1].metric("Active Tickers", int(summary["tickers"]))
-            metrics[2].metric("Buy Value", fmt_dollar_compact(summary["purchase_value"]))
-            metrics[3].metric("Sale Value", fmt_dollar_compact(summary["sale_value"]))
+            metrics[2].metric("Buy Value", insider_value_display(summary["purchase_value"], currencies))
+            metrics[3].metric("Sale Value", insider_value_display(summary["sale_value"], currencies))
             metrics[4].metric(
                 "Net Insider Value",
-                fmt_dollar_compact(summary["net_value"]),
-                f"{summary['net_value']:+,.0f}",
+                insider_value_display(summary["net_value"], currencies),
+                None if mixed_currencies else f"{summary['net_value']:+,.0f}",
                 delta_color="normal",
             )
 
             if insider_display.empty:
-                st.info("No open-market insider trades match the selected filters.")
+                if ticker:
+                    st.info(
+                        f"No supported insider transactions for {ticker.upper()} match the selected filters. "
+                        "The app checked the recent SEC feed and ticker-specific Yahoo Finance data. Foreign issuers "
+                        "may report through a home-market disclosure system that is not yet machine-readable here, "
+                        "so an empty result does not prove there were no transactions."
+                    )
+                else:
+                    st.info("No supported insider trades match the selected filters.")
             else:
+                if ticker_symbol in ALL_TICKERS:
+                    source_names = ", ".join(sorted(insider_display["source"].dropna().astype(str).unique()))
+                    st.caption(f"Sources used for {ticker_symbol}: {source_names or 'No source label available'}")
                 view = st.segmented_control(
                     "Insider view",
                     ["By Stock", "Transactions"],
@@ -1103,16 +1163,19 @@ def disclosures_page() -> None:
                         "estimated_value",
                         "owner_name",
                         "role",
+                        "transaction_nature",
                         "shares",
                         "price_per_share",
+                        "currency",
                         "shares_after",
+                        "source",
                         "filing_url",
                     ]
                     detail_styled = detail[detail_columns].style.format(
                         {
-                            "estimated_value": "${:,.0f}",
+                            "estimated_value": "{:,.0f}",
                             "shares": "{:,.0f}",
-                            "price_per_share": "${:,.2f}",
+                            "price_per_share": "{:,.2f}",
                             "shares_after": "{:,.0f}",
                         }
                     ).map(disclosure_style, subset=["trade_side"])
@@ -1128,10 +1191,13 @@ def disclosures_page() -> None:
                             "estimated_value": "Estimated Value",
                             "owner_name": "Insider",
                             "role": "Role",
+                            "transaction_nature": "Nature",
                             "shares": "Shares",
                             "price_per_share": "Price",
+                            "currency": "Currency",
                             "shares_after": "Holdings After",
-                            "filing_url": st.column_config.LinkColumn("Source", display_text="SEC filing"),
+                            "source": "Data Source",
+                            "filing_url": st.column_config.LinkColumn("Source", display_text="Official filing"),
                         },
                     )
                 else:
@@ -1155,14 +1221,15 @@ def disclosures_page() -> None:
                         "sale_value",
                         "net_value",
                         "insider_count",
+                        "currencies",
                         "latest_trade",
                         "analysis_url",
                     ]
                     stock_styled = stock_summary[stock_columns].style.format(
                         {
-                            "buy_value": "${:,.0f}",
-                            "sale_value": "${:,.0f}",
-                            "net_value": "${:+,.0f}",
+                            "buy_value": "{:,.0f}",
+                            "sale_value": "{:,.0f}",
+                            "net_value": "{:+,.0f}",
                         }
                     ).map(disclosure_style, subset=["signal"]).map(
                         net_value_style,
@@ -1182,13 +1249,211 @@ def disclosures_page() -> None:
                             "sale_value": "Sale Value",
                             "net_value": "Net Value",
                             "insider_count": "Insiders",
+                            "currencies": "Currency",
                             "latest_trade": "Latest Trade",
                             "analysis_url": st.column_config.LinkColumn("Chart", display_text="Open analysis"),
                         },
                     )
 
     st.caption(
-        "Disclosure data is delayed and should be treated as supporting context, not a real-time trading signal or financial advice."
+        "Disclosure data is delayed and should be treated as supporting context, not a real-time trading signal or financial advice. "
+        "Search coverage combines the recent SEC feed, ticker-specific Yahoo Finance transactions, and supported official-company "
+        "supplements. Nokia Article 19 transactions can be reported in USD or EUR; values are displayed in the reported currency."
+    )
+
+
+def dark_pool_page() -> None:
+    render_page_header(
+        "Dark Pool Activity",
+        "Delayed FINRA ATS weekly volume anomalies across the tracked stock universe.",
+    )
+    st.warning(
+        "FINRA ATS data is published with a two- to four-week delay and does not identify buyer- or seller-initiated direction. "
+        "This page detects unusual activity, not dark-pool buy or sell signals."
+    )
+    try:
+        ats_data = load_ats_activity_data(MARKET_DATA_VERSION)
+        market_data = load_technical_data(MARKET_DATA_VERSION)
+    except Exception as exc:
+        st.error(f"Could not load FINRA ATS data: {exc}")
+        return
+    ats_context = add_market_context(ats_data, market_data)
+    if ats_context.empty:
+        st.info("No FINRA ATS data is available for the tracked universe.")
+        return
+
+    threshold1, threshold2, threshold3, search_col = st.columns([1, 1, 1, 1.2])
+    volume_multiple = threshold1.number_input(
+        "Volume Multiple",
+        min_value=1.2,
+        max_value=5.0,
+        value=2.0,
+        step=0.1,
+    )
+    z_threshold = threshold2.number_input(
+        "Z-Score",
+        min_value=1.0,
+        max_value=5.0,
+        value=2.5,
+        step=0.1,
+    )
+    minimum_shares = threshold3.selectbox(
+        "Minimum ATS Shares",
+        [50_000, 100_000, 250_000, 500_000, 1_000_000],
+        index=1,
+        format_func=lambda value: f"{value / 1_000:,.0f}K",
+    )
+    ticker_search = search_col.text_input("Ticker", placeholder="NVDA").strip().upper()
+
+    history, anomalies = build_ats_anomalies(
+        ats_context,
+        volume_multiple=volume_multiple,
+        z_threshold=z_threshold,
+        minimum_shares=minimum_shares,
+    )
+    if ticker_search:
+        anomalies = anomalies[anomalies["ticker"].str.contains(ticker_search, regex=False)]
+
+    latest_week = history["week"].max()
+    latest_published = history["published_date"].max()
+    strongest = anomalies.iloc[0] if not anomalies.empty else None
+    metrics = st.columns(5)
+    metrics[0].metric("Active Anomalies", len(anomalies))
+    metrics[1].metric("Tracked ATS Symbols", history["ticker"].nunique())
+    metrics[2].metric("Latest Trade Week", latest_week.strftime("%Y-%m-%d"))
+    metrics[3].metric(
+        "Published",
+        "N/A" if pd.isna(latest_published) else latest_published.strftime("%Y-%m-%d"),
+    )
+    metrics[4].metric(
+        "Strongest Signal",
+        "None" if strongest is None else str(strongest["ticker"]),
+        None if strongest is None else f"{float(strongest['volume_multiple']):.2f}x baseline",
+    )
+
+    st.subheader("Latest ATS Anomalies")
+    if anomalies.empty:
+        st.success("No tracked stock currently exceeds the selected ATS anomaly thresholds.")
+    else:
+        anomaly_display = anomalies.copy()
+        anomaly_display["analysis_url"] = anomaly_display["ticker"].map(stock_analysis_url)
+        anomaly_columns = [
+            "ticker",
+            "issue_name",
+            "week",
+            "published_date",
+            "ats_shares",
+            "ats_trades",
+            "ats_notional",
+            "baseline_median",
+            "volume_multiple",
+            "z_score",
+            "week_change_pct",
+            "ats_volume_pct",
+            "weekly_return",
+            "anomaly_score",
+            "analysis_url",
+        ]
+        anomaly_styled = anomaly_display[anomaly_columns].style.format(
+            {
+                "week": lambda value: value.strftime("%Y-%m-%d"),
+                "published_date": lambda value: value.strftime("%Y-%m-%d"),
+                "ats_shares": "{:,.0f}",
+                "ats_trades": "{:,.0f}",
+                "ats_notional": "${:,.0f}",
+                "baseline_median": "{:,.0f}",
+                "volume_multiple": "{:.2f}x",
+                "z_score": "{:.2f}",
+                "week_change_pct": "{:+.1f}%",
+                "ats_volume_pct": "{:.1f}%",
+                "weekly_return": "{:+.1f}%",
+                "anomaly_score": "{:.0f}",
+            },
+            na_rep="-",
+        ).map(
+            lambda value: (
+                "color: #3fb950; font-weight: 700"
+                if pd.notna(value) and float(value) >= 0
+                else "color: #f85149; font-weight: 700"
+                if pd.notna(value)
+                else ""
+            ),
+            subset=["weekly_return"],
+        )
+        st.dataframe(
+            anomaly_styled,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "ticker": "Ticker",
+                "issue_name": "Company",
+                "week": "Trade Week",
+                "published_date": "FINRA Published",
+                "ats_shares": "ATS Shares",
+                "ats_trades": "ATS Trades",
+                "ats_notional": "ATS Notional",
+                "baseline_median": "8W Median",
+                "volume_multiple": "vs Baseline",
+                "z_score": "Z-Score",
+                "week_change_pct": "Weekly Change",
+                "ats_volume_pct": "ATS / Total Volume",
+                "weekly_return": "Price 5D",
+                "anomaly_score": "Anomaly Score",
+                "analysis_url": st.column_config.LinkColumn("Analysis", display_text="Open chart"),
+            },
+        )
+
+    available_tickers = sorted(history["ticker"].dropna().unique())
+    default_ticker = (
+        str(strongest["ticker"])
+        if strongest is not None
+        else available_tickers[0]
+    )
+    selected_ticker = st.selectbox(
+        "ATS history ticker",
+        options=available_tickers,
+        index=available_tickers.index(default_ticker),
+    )
+    ticker_history = history[history["ticker"] == selected_ticker].sort_values("week").copy()
+    history_chart = go.Figure()
+    history_chart.add_trace(
+        go.Bar(
+            x=ticker_history["week"],
+            y=ticker_history["ats_shares"],
+            name="ATS Shares",
+            marker_color=ticker_history["is_anomaly"].map(
+                lambda value: "#f85149" if value else "#58a6ff"
+            ),
+        )
+    )
+    history_chart.add_trace(
+        go.Scatter(
+            x=ticker_history["week"],
+            y=ticker_history["baseline_median"],
+            name="Prior 8W Median",
+            line={"color": "#d29922", "width": 2},
+        )
+    )
+    history_chart.update_layout(
+        title=f"{selected_ticker} Weekly ATS Activity",
+        template="plotly_dark",
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        height=440,
+        xaxis_title="Trade Week",
+        yaxis_title="ATS Shares",
+        hovermode="x unified",
+        margin={"l": 20, "r": 20, "t": 55, "b": 30},
+    )
+    st.plotly_chart(history_chart, width="stretch")
+    st.caption(
+        "Method: anomaly when ATS shares are at least the selected multiple of the prior eight-week median or "
+        "the selected z-score above the prior eight-week mean, subject to the minimum-share filter. "
+        "ATS / Total Volume uses Yahoo consolidated weekly volume as context."
+    )
+    st.caption(
+        "Sources: FINRA OTC Transparency Weekly ATS Summary and Yahoo Finance market volume. "
+        "FINRA data is delayed and can be revised."
     )
 
 
@@ -2507,6 +2772,7 @@ if __name__ == "__main__":
                 st.Page(decision_dashboard_page, title="Decision Dashboard", url_path="overview", default=True),
                 st.Page(recommendations_page, title="Recommendations", url_path="recommendations"),
                 st.Page(signals_page, title="Signals", url_path="signals"),
+                st.Page(dark_pool_page, title="Dark Pool Activity", url_path="dark-pool"),
             ],
             "Research": [
                 st.Page(stock_analysis_page, title="Stock Analysis", url_path="stock-analysis"),

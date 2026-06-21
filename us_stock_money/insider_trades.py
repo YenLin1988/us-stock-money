@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import time
+import re
 from urllib.parse import urljoin
 from xml.etree import ElementTree
 
 import pandas as pd
 import requests
+import yfinance as yf
+from bs4 import BeautifulSoup
 
 
 SEC_FORM4_FEED_URL = (
@@ -16,6 +19,7 @@ SEC_FORM4_FEED_URL = (
 )
 SEC_USER_AGENT = "YenLin1988 us-stock-money admin@us-stock-money.local"
 SUPPORTED_FORM_TYPES = {"4", "4/A"}
+NOKIA_MANAGER_TRANSACTIONS_URL = "https://www.nokia.com/newsroom/?h=1&t=managers+transactions"
 
 DISPLAY_COLUMNS = [
     "transaction_date",
@@ -29,11 +33,30 @@ DISPLAY_COLUMNS = [
     "price_per_share",
     "estimated_value",
     "shares_after",
+    "transaction_nature",
+    "source",
+    "currency",
     "filing_url",
 ]
 
 
 def download_insider_trades(max_filings: int = 30) -> pd.DataFrame:
+    frames = []
+    try:
+        frames.append(download_sec_form4_trades(max_filings=max_filings))
+    except Exception:
+        pass
+    try:
+        frames.append(download_nokia_manager_trades(max_releases=max_filings))
+    except Exception:
+        pass
+    usable = [frame for frame in frames if not frame.empty]
+    if not usable:
+        raise RuntimeError("No SEC Form 4 or supplemental manager transaction data was available")
+    return normalize_insider_trades(pd.concat(usable, ignore_index=True).to_dict("records"))
+
+
+def download_sec_form4_trades(max_filings: int = 30) -> pd.DataFrame:
     session = requests.Session()
     session.headers.update(
         {
@@ -67,6 +90,153 @@ def download_insider_trades(max_filings: int = 30) -> pd.DataFrame:
         time.sleep(0.12)
 
     return normalize_insider_trades(rows)
+
+
+def download_nokia_manager_trades(max_releases: int = 30) -> pd.DataFrame:
+    session = requests.Session()
+    session.headers.update({"User-Agent": "us-stock-money/1.0"})
+    response = session.get(NOKIA_MANAGER_TRANSACTIONS_URL, timeout=30)
+    response.raise_for_status()
+    links = parse_nokia_release_links(response.text, limit=max_releases)
+    rows = []
+    for url in links:
+        release = session.get(url, timeout=30)
+        release.raise_for_status()
+        rows.extend(parse_nokia_manager_release(release.text, filing_url=url))
+    return normalize_insider_trades(rows)
+
+
+def download_ticker_insider_trades(ticker: str) -> pd.DataFrame:
+    symbol = ticker.strip().upper()
+    if not symbol:
+        return pd.DataFrame(columns=DISPLAY_COLUMNS)
+    frames = []
+    yahoo_rows = normalize_yahoo_insider_transactions(
+        yf.Ticker(symbol).get_insider_transactions(),
+        ticker=symbol,
+    )
+    if not yahoo_rows.empty:
+        frames.append(yahoo_rows)
+    if symbol == "NOK":
+        try:
+            frames.append(download_nokia_manager_trades())
+        except Exception:
+            pass
+    if not frames:
+        return pd.DataFrame(columns=DISPLAY_COLUMNS)
+    return normalize_insider_trades(pd.concat(frames, ignore_index=True).to_dict("records"))
+
+
+def normalize_yahoo_insider_transactions(
+    frame: pd.DataFrame | None,
+    *,
+    ticker: str,
+) -> pd.DataFrame:
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=DISPLAY_COLUMNS)
+    rows = []
+    for record in frame.to_dict("records"):
+        text = str(record.get("Text") or "")
+        side = _classify_yahoo_side(text)
+        if side is None:
+            continue
+        shares = _coerce_number(record.get("Shares"))
+        estimated_value = _coerce_number(record.get("Value"))
+        price = estimated_value / shares if shares and estimated_value else _price_from_text(text)
+        transaction_date = pd.to_datetime(record.get("Start Date"), errors="coerce")
+        if pd.isna(transaction_date):
+            continue
+        rows.append(
+            {
+                "transaction_date": transaction_date,
+                "filing_time": transaction_date,
+                "ticker": ticker.upper(),
+                "issuer_name": ticker.upper(),
+                "owner_name": str(record.get("Insider") or ""),
+                "role": str(record.get("Position") or ""),
+                "trade_side": side,
+                "shares": shares,
+                "price_per_share": price,
+                "estimated_value": estimated_value or shares * price,
+                "shares_after": 0.0,
+                "transaction_nature": "Purchase" if side == "Purchase" else "Sale",
+                "source": "Yahoo Finance",
+                "currency": "USD",
+                "filing_url": str(record.get("URL") or ""),
+            }
+        )
+    return normalize_insider_trades(rows)
+
+
+def parse_nokia_release_links(content: str, limit: int = 30) -> list[str]:
+    soup = BeautifulSoup(content, "html.parser")
+    links = []
+    seen = set()
+    for anchor in soup.select("a.td_headlines[href]"):
+        title = anchor.get("title", "")
+        url = anchor.get("href", "")
+        if "managers' transactions" not in str(title).lower() or not url or url in seen:
+            continue
+        seen.add(url)
+        links.append(str(url))
+        if len(links) >= limit:
+            break
+    return links
+
+
+def parse_nokia_manager_release(
+    content: str,
+    *,
+    filing_url: str,
+) -> list[dict[str, object]]:
+    soup = BeautifulSoup(content, "html.parser")
+    text = soup.get_text("\n", strip=True)
+    start = text.find("Transaction notification under Article 19")
+    end = text.find("About Nokia", start)
+    if start < 0:
+        return []
+    section = text[start:end if end > start else None]
+    owner_name = _match_text(section, r"Name:\s*([^\n]+)")
+    role = _match_text(section, r"Position:\s*([^\n]+)")
+    filing_time = _match_text(text, r"Managers[’'] transactions\s*(\d{1,2}\s+\w+\s+\d{4})")
+    blocks = re.split(r"(?=Transaction date:\s*\d{4}-\d{2}-\d{2})", section)
+    rows = []
+    for block in blocks:
+        transaction_date = _match_text(block, r"Transaction date:\s*(\d{4}-\d{2}-\d{2})")
+        nature = _match_text(block, r"Nature of the transaction:\s*([^\n]+)").upper()
+        if not transaction_date or nature not in {"ACQUISITION", "DISPOSAL"}:
+            continue
+        detail = re.search(
+            r"Transaction details\s*\(1\):\s*Volume:\s*([\d\s,.]+)\s+Unit price:\s*([\d\s,.]+|N/A)(?:\s+([A-Z]{3}))?",
+            block,
+            flags=re.IGNORECASE,
+        )
+        if detail is None:
+            continue
+        shares = _parse_number(detail.group(1))
+        price = _parse_number(detail.group(2))
+        venue = _match_text(block, r"Venue:\s*([^\n]+)")
+        currency = (detail.group(3) or ("USD" if "XNYS" in venue else "EUR")).upper()
+        rows.append(
+            {
+                "transaction_date": transaction_date,
+                "filing_time": filing_time,
+                "ticker": "NOK",
+                "issuer_name": "Nokia Corporation",
+                "owner_name": owner_name,
+                "role": role,
+                "trade_side": "Purchase" if nature == "ACQUISITION" else "Sale",
+                "shares": shares,
+                "price_per_share": price,
+                "estimated_value": shares * price,
+                "shares_after": 0.0,
+                "transaction_nature": nature.title(),
+                "source": "Nokia Article 19",
+                "currency": currency,
+                "filing_url": filing_url,
+            }
+        )
+    return rows
 
 
 def parse_form4_feed(content: bytes, max_filings: int = 30) -> list[dict[str, str]]:
@@ -139,6 +309,9 @@ def parse_ownership_document(
                 "price_per_share": price,
                 "estimated_value": shares * price,
                 "shares_after": _number(transaction, "postTransactionAmounts/sharesOwnedFollowingTransaction/value"),
+                "transaction_nature": "Open-market purchase" if code == "P" else "Open-market sale",
+                "source": "SEC Form 4",
+                "currency": "USD",
                 "filing_url": filing_url,
             }
         )
@@ -166,7 +339,6 @@ def normalize_insider_trades(records: list[dict[str, object]]) -> pd.DataFrame:
                 "trade_side",
                 "shares",
                 "price_per_share",
-                "shares_after",
             ]
         )
         .sort_values(["filing_time", "transaction_date"], ascending=False)
@@ -216,6 +388,7 @@ def aggregate_insider_by_ticker(frame: pd.DataFrame) -> pd.DataFrame:
         "sale_value",
         "net_value",
         "insider_count",
+        "currencies",
         "latest_trade",
     ]
     usable = frame[frame["ticker"].fillna("") != ""].copy()
@@ -240,6 +413,7 @@ def aggregate_insider_by_ticker(frame: pd.DataFrame) -> pd.DataFrame:
                 "sale_value": sale_value,
                 "net_value": buy_value - sale_value,
                 "insider_count": group["owner_name"].nunique(),
+                "currencies": ", ".join(sorted(group["currency"].dropna().astype(str).unique())),
                 "latest_trade": group["transaction_date"].max(),
             }
         )
@@ -278,6 +452,45 @@ def _number(root: ElementTree.Element, path: str) -> float:
         return float(_text(root, path).replace(",", ""))
     except ValueError:
         return 0.0
+
+
+def _match_text(content: str, pattern: str) -> str:
+    match = re.search(pattern, content, flags=re.IGNORECASE)
+    return "" if match is None else match.group(1).strip()
+
+
+def _parse_number(value: str) -> float:
+    cleaned = value.replace("\xa0", "").replace(" ", "").replace(",", "")
+    try:
+        return float(cleaned)
+    except ValueError:
+        return 0.0
+
+
+def _coerce_number(value: object) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return number if pd.notna(number) else 0.0
+
+
+def _classify_yahoo_side(text: str) -> str | None:
+    value = text.lower()
+    if value.startswith("purchase") or " purchase at " in f" {value} ":
+        return "Purchase"
+    if value.startswith("sale") or " sale at " in f" {value} ":
+        return "Sale"
+    return None
+
+
+def _price_from_text(text: str) -> float:
+    match = re.search(r"price\s+([\d,.]+)(?:\s*-\s*([\d,.]+))?", text, flags=re.IGNORECASE)
+    if match is None:
+        return 0.0
+    low = _parse_number(match.group(1))
+    high = _parse_number(match.group(2)) if match.group(2) else low
+    return (low + high) / 2
 
 
 def _latest_text(frame: pd.DataFrame, column: str) -> str:
