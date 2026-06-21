@@ -6,7 +6,7 @@ import pandas as pd
 import yfinance as yf
 
 from .model_config import ALL_TICKERS, BENCHMARKS, INTRADAY_BENCHMARKS, SECTOR_ETFS, THEME_BASKETS
-from .scoring import score_sector_flow
+from .scoring import normalize, score_sector_flow
 
 
 def download_prices(period: str = "6mo", interval: str = "1d", tickers: list[str] | None = None) -> pd.DataFrame:
@@ -126,6 +126,66 @@ def build_theme_table(data: pd.DataFrame) -> pd.DataFrame:
     if not rows:
         raise RuntimeError("No theme rows could be computed from market data")
     return pd.DataFrame(rows).sort_values("flow_score", ascending=False)
+
+
+def build_weekly_theme_trends(data: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate daily theme prices and volume into weekly flow proxies."""
+    close = _field(data, "Close")
+    volume = _field(data, "Volume")
+    weekly_close = close.resample("W-FRI").last()
+    weekly_returns = weekly_close.pct_change(fill_method=None) * 100
+    weekly_dollar_volume = (close * volume).resample("W-FRI").sum()
+    trailing_volume = weekly_dollar_volume.rolling(8, min_periods=3).mean().shift(1)
+    weekly_volume_trend = ((weekly_dollar_volume / trailing_volume) - 1) * 100
+    spy_returns = weekly_returns["SPY"] if "SPY" in weekly_returns else pd.Series(0.0, index=weekly_returns.index)
+
+    rows = []
+    for week in weekly_returns.index:
+        for theme, config in THEME_BASKETS.items():
+            tickers = [ticker for ticker in config["tickers"] if ticker in weekly_returns.columns]
+            if not tickers:
+                continue
+            member_returns = weekly_returns.loc[week, tickers].dropna()
+            if member_returns.empty:
+                continue
+            member_volume_trend = weekly_volume_trend.loc[week, tickers].dropna()
+            theme_return = float(member_returns.mean())
+            relative_return = theme_return - float(spy_returns.get(week, 0.0) or 0.0)
+            volume_trend = float(member_volume_trend.mean()) if not member_volume_trend.empty else 0.0
+            flow_score = (
+                normalize(theme_return, -8.0, 8.0) * 0.45
+                + normalize(relative_return, -6.0, 6.0) * 0.30
+                + normalize(volume_trend, -40.0, 80.0) * 0.25
+            )
+            dollar_volume = weekly_dollar_volume.loc[week, tickers].dropna()
+            rows.append(
+                {
+                    "week": week,
+                    "theme": theme,
+                    "weekly_return": theme_return,
+                    "relative_return": relative_return,
+                    "volume_trend": volume_trend,
+                    "flow_score": flow_score,
+                    "net_flow": flow_score - 50.0,
+                    "dollar_volume_m": float(dollar_volume.sum() / 1_000_000) if not dollar_volume.empty else 0.0,
+                    "component_count": int(member_returns.count()),
+                }
+            )
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "week",
+                "theme",
+                "weekly_return",
+                "relative_return",
+                "volume_trend",
+                "flow_score",
+                "net_flow",
+                "dollar_volume_m",
+                "component_count",
+            ]
+        )
+    return pd.DataFrame(rows).sort_values(["week", "flow_score"], ascending=[True, False]).reset_index(drop=True)
 
 
 def build_component_table(data: pd.DataFrame) -> pd.DataFrame:

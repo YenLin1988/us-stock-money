@@ -2,7 +2,12 @@ import unittest
 
 import pandas as pd
 
-from us_stock_money.market_data import build_component_table, build_intraday_component_table, build_intraday_price_table
+from us_stock_money.market_data import (
+    build_component_table,
+    build_intraday_component_table,
+    build_intraday_price_table,
+    build_weekly_theme_trends,
+)
 
 
 class MarketDataTests(unittest.TestCase):
@@ -75,6 +80,27 @@ class MarketDataTests(unittest.TestCase):
         self.assertEqual(row["open_price"], 100.0)
         self.assertEqual(row["last_price"], 105.0)
         self.assertAlmostEqual(row["open_to_current_pct"], 5.0)
+
+    def test_weekly_theme_trends_capture_return_and_flow_direction(self):
+        dates = pd.date_range("2026-01-05", periods=60, freq="B")
+        columns = pd.MultiIndex.from_product(
+            [["Close", "Volume"], ["MU", "SPY"]],
+            names=["Price", "Ticker"],
+        )
+        data = pd.DataFrame(index=dates, columns=columns, dtype=float)
+        data[("Close", "MU")] = [100 + index * 0.8 for index in range(60)]
+        data[("Close", "SPY")] = [400 + index * 0.2 for index in range(60)]
+        data[("Volume", "MU")] = [1_000_000.0] * 40 + [2_000_000.0] * 20
+        data[("Volume", "SPY")] = 10_000_000.0
+
+        trends = build_weekly_theme_trends(data)
+        memory = trends[trends["theme"] == "Memory / HBM"]
+        latest = memory.iloc[-1]
+
+        self.assertGreater(len(memory), 5)
+        self.assertGreater(latest["weekly_return"], 0)
+        self.assertGreater(latest["relative_return"], 0)
+        self.assertGreater(latest["net_flow"], 0)
 
 
 if __name__ == "__main__":

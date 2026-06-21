@@ -25,6 +25,7 @@ from us_stock_money.market_data import (
     build_intraday_market_table,
     build_sector_table,
     build_theme_table,
+    build_weekly_theme_trends,
     download_intraday_component_prices,
     download_intraday_prices,
     download_prices,
@@ -94,9 +95,17 @@ st.markdown(
 
 
 @st.cache_data(ttl=900)
-def load_data(market_data_version: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def load_data(
+    market_data_version: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     data = download_prices()
-    return build_theme_table(data), build_component_table(data), build_sector_table(data), benchmark_table(data)
+    return (
+        build_theme_table(data),
+        build_component_table(data),
+        build_sector_table(data),
+        benchmark_table(data),
+        build_weekly_theme_trends(data),
+    )
 
 
 @st.cache_data(ttl=300)
@@ -272,7 +281,7 @@ def render_page_header(title: str, caption: str) -> None:
 
 def load_market_page_context() -> dict[str, object] | None:
     try:
-        theme_df, component_df, sector_df, bench_df = load_data(MARKET_DATA_VERSION)
+        theme_df, component_df, sector_df, bench_df, weekly_theme_df = load_data(MARKET_DATA_VERSION)
     except Exception as exc:
         st.error(f"Could not load market data: {exc}")
         return None
@@ -295,6 +304,7 @@ def load_market_page_context() -> dict[str, object] | None:
         "component_df": component_df,
         "sector_df": sector_df,
         "bench_df": bench_df,
+        "weekly_theme_df": weekly_theme_df,
         "intraday_df": intraday_df,
         "intraday_component_df": intraday_component_df,
         "theme_scores": theme_scores,
@@ -578,6 +588,103 @@ def research_page() -> None:
         )
         st.plotly_chart(radar, width="stretch")
 
+    st.subheader("Weekly Money Flow and Sector Moves")
+    st.caption(
+        "Weekly money flow is a price-and-volume proxy built from equal-weight theme returns, "
+        "relative strength versus SPY, and weekly dollar-volume trend."
+    )
+    weekly_df = context["weekly_theme_df"]
+    if weekly_df.empty:
+        st.info("Weekly trend data is unavailable.")
+    else:
+        week_window = st.segmented_control(
+            "History window",
+            options=[8, 13, 26, 52],
+            default=13,
+            format_func=lambda value: f"{value} weeks",
+        )
+        available_weeks = sorted(weekly_df["week"].dropna().unique())
+        selected_weeks = available_weeks[-int(week_window or 13):]
+        weekly_display = weekly_df[weekly_df["week"].isin(selected_weeks)].copy()
+        weekly_display["week_label"] = weekly_display["week"].dt.strftime("%Y-%m-%d")
+
+        latest_week = weekly_display["week"].max()
+        latest = weekly_display[weekly_display["week"] == latest_week]
+        top_inflow = latest.nlargest(3, "net_flow")
+        top_outflow = latest.nsmallest(3, "net_flow")
+        top_gainers = latest.nlargest(3, "weekly_return")
+        top_losers = latest.nsmallest(3, "weekly_return")
+
+        summary_cols = st.columns(4)
+        summary_groups = [
+            ("Strongest Inflow", top_inflow, "net_flow"),
+            ("Strongest Outflow", top_outflow, "net_flow"),
+            ("Biggest Weekly Gains", top_gainers, "weekly_return"),
+            ("Biggest Weekly Losses", top_losers, "weekly_return"),
+        ]
+        for column, (title, frame, value_column) in zip(summary_cols, summary_groups, strict=False):
+            with column:
+                st.markdown(f"**{title}**")
+                for row in frame.itertuples():
+                    value = float(getattr(row, value_column))
+                    st.markdown(
+                        f"`{row.theme}` <span class=\"{pct_color_class(value)}\">{value:+.1f}{'%' if value_column == 'weekly_return' else ''}</span>",
+                        unsafe_allow_html=True,
+                    )
+
+        flow_pivot = weekly_display.pivot(index="theme", columns="week_label", values="net_flow")
+        return_pivot = weekly_display.pivot(index="theme", columns="week_label", values="weekly_return")
+        flow_heatmap = px.imshow(
+            flow_pivot,
+            color_continuous_scale=["#f85149", "#111820", "#3fb950"],
+            color_continuous_midpoint=0,
+            aspect="auto",
+            labels={"color": "Net flow"},
+            title="Weekly Money Flow Direction (-50 Outflow to +50 Inflow)",
+        )
+        flow_heatmap.update_layout(template="plotly_dark", height=520)
+        st.plotly_chart(flow_heatmap, width="stretch")
+
+        return_heatmap = px.imshow(
+            return_pivot,
+            color_continuous_scale=["#f85149", "#111820", "#3fb950"],
+            color_continuous_midpoint=0,
+            aspect="auto",
+            labels={"color": "Weekly return %"},
+            title="Weekly Theme Returns",
+        )
+        return_heatmap.update_layout(template="plotly_dark", height=520)
+        st.plotly_chart(return_heatmap, width="stretch")
+
+        with st.expander("Weekly trend detail"):
+            detail = weekly_display[
+                [
+                    "week",
+                    "theme",
+                    "flow_score",
+                    "net_flow",
+                    "weekly_return",
+                    "relative_return",
+                    "volume_trend",
+                    "dollar_volume_m",
+                    "component_count",
+                ]
+            ].sort_values(["week", "flow_score"], ascending=[False, False])
+            st.dataframe(
+                detail.style.format(
+                    {
+                        "flow_score": "{:.1f}",
+                        "net_flow": "{:+.1f}",
+                        "weekly_return": "{:+.2f}%",
+                        "relative_return": "{:+.2f}%",
+                        "volume_trend": "{:+.1f}%",
+                        "dollar_volume_m": "${:,.0f}M",
+                    }
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+
     st.subheader("Selected Watchlist")
     watchlist_df = context["component_df"][context["component_df"]["ticker"].isin(WATCHLIST_TICKERS)]
     st.dataframe(format_component_table(watchlist_df), width="stretch", hide_index=True)
@@ -604,7 +711,7 @@ def main() -> None:
         st.rerun()
 
     try:
-        theme_df, component_df, sector_df, bench_df = load_data(MARKET_DATA_VERSION)
+        theme_df, component_df, sector_df, bench_df, weekly_theme_df = load_data(MARKET_DATA_VERSION)
     except Exception as exc:  # pragma: no cover - Streamlit runtime display
         st.error(f"Could not load market data: {exc}")
         return

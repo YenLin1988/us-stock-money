@@ -14,7 +14,7 @@ The Streamlit app uses native multi-page navigation:
 | Recommendations | Integrated rankings with factor-level scores |
 | Signals | Market timing, 5-minute breakouts, and exit signals |
 | Disclosures | Congressional STOCK Act and SEC Form 4 transactions |
-| Market Research | Theme rotation, watchlist, sectors, benchmarks, and component tables |
+| Market Research | Weekly money-flow trends, theme rotation, watchlist, sectors, benchmarks, and component tables |
 
 ## What It Tracks Now
 
@@ -78,6 +78,19 @@ The app estimates money flow using public market data:
 - theme-group leadership across AI compute, energy/materials, defense/space, software/security, and healthcare/automation
 
 Because free public data does not provide official real-time fund flows, this project uses market-implied flow proxies. It is best read as a thematic rotation radar, not a complete institutional flow tape.
+
+## Weekly Theme Trends
+
+The Market Research page aggregates daily data into weekly theme trends:
+
+- weekly equal-weight theme return
+- relative weekly return versus SPY
+- weekly dollar-volume trend versus the prior eight weeks
+- normalized weekly flow score and net inflow/outflow direction
+- strongest inflow, strongest outflow, biggest gain, and biggest loss rankings
+- 8, 13, 26, and 52-week heatmap windows
+
+These weekly money-flow values are price-and-volume proxies, not official fund-flow reports.
 
 ## Top 5 Flow Candidates
 
