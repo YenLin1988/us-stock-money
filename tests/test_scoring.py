@@ -4,6 +4,7 @@ import unittest
 from us_stock_money.scoring import (
     broad_flow_score,
     build_breakout_candidates,
+    build_integrated_recommendations,
     build_intraday_breakout_candidates,
     build_top_recommendations,
     classify_regime,
@@ -100,6 +101,85 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(recs[0]["last_price"], 105)
         self.assertEqual(recs[0]["open_to_current_pct"], 5)
         self.assertIn("flow score", recs[0]["reason"])
+
+    def test_integrated_recommendations_combine_market_and_disclosure_signals(self):
+        components = [
+            {
+                "ticker": "MU",
+                "themes": "Memory / HBM",
+                "open_price": 100,
+                "last_price": 105,
+                "open_to_current_pct": 5,
+                "flow_score": 90,
+                "return_5d": 8,
+                "return_20d": 15,
+                "relative_5d": 6,
+            },
+            {
+                "ticker": "ABC",
+                "themes": "Test",
+                "open_price": 100,
+                "last_price": 95,
+                "open_to_current_pct": -5,
+                "flow_score": 45,
+                "return_5d": -4,
+                "return_20d": -8,
+                "relative_5d": -3,
+            },
+        ]
+        intraday = [
+            {
+                "ticker": "MU",
+                "themes": "Memory / HBM",
+                "session_open": 100,
+                "last_price": 105,
+                "day_return": 5,
+                "return_30m": 1.5,
+                "return_60m": 3,
+                "vwap": 103,
+                "vwap_gap_pct": 1.9,
+                "below_vwap": False,
+                "volume_trend": 100,
+            },
+            {
+                "ticker": "ABC",
+                "themes": "Test",
+                "session_open": 100,
+                "last_price": 95,
+                "day_return": -5,
+                "return_30m": -1,
+                "return_60m": -2,
+                "vwap": 98,
+                "vwap_gap_pct": -3,
+                "below_vwap": True,
+                "volume_trend": -20,
+            },
+        ]
+        congress = [
+            {"ticker": "MU", "trade_side": "Purchase", "amount_range_low": 15_001, "amount_range_high": 50_000},
+            {"ticker": "ABC", "trade_side": "Sale", "amount_range_low": 15_001, "amount_range_high": 50_000},
+        ]
+        insiders = [
+            {"ticker": "MU", "trade_side": "Purchase", "estimated_value": 100_000},
+            {"ticker": "ABC", "trade_side": "Sale", "estimated_value": 100_000},
+        ]
+
+        recommendations = build_integrated_recommendations(
+            components,
+            {"Memory / HBM": 85, "Test": 40},
+            intraday,
+            congress,
+            insiders,
+            market_score=80,
+            limit=2,
+        )
+
+        self.assertEqual(recommendations[0]["ticker"], "MU")
+        self.assertGreater(recommendations[0]["integrated_score"], recommendations[1]["integrated_score"])
+        self.assertEqual(recommendations[0]["congress_buys"], 1)
+        self.assertEqual(recommendations[0]["insider_buys"], 1)
+        self.assertEqual(recommendations[1]["exit_signal"], "Exit")
+        self.assertIn("Congress 1B/0S", recommendations[0]["reason"])
 
     def test_breakout_candidates_reward_single_stock_surge(self):
         rows = [

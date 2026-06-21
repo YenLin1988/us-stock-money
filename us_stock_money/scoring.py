@@ -107,6 +107,171 @@ def build_top_recommendations(component_rows, theme_scores: Mapping[str, float],
     return sorted(recommendations, key=lambda item: float(item["composite_score"]), reverse=True)[:limit]
 
 
+def build_integrated_recommendations(
+    component_rows,
+    theme_scores: Mapping[str, float],
+    intraday_rows,
+    congress_rows,
+    insider_rows,
+    market_score: float,
+    limit: int = 5,
+) -> list[dict[str, object]]:
+    """Combine market, flow, disclosure, and risk signals into one transparent score."""
+    intraday_by_ticker = {
+        str(row.get("ticker", "")): row
+        for row in build_intraday_breakout_candidates(intraday_rows, limit=10_000)
+    }
+    congress_by_ticker = _disclosure_scores(congress_rows, value_fields=("amount_range_low", "amount_range_high"))
+    insider_by_ticker = _disclosure_scores(insider_rows, value_fields=("estimated_value",))
+
+    recommendations = []
+    for row in _iter_records(component_rows):
+        ticker = str(row.get("ticker", ""))
+        themes = [theme.strip() for theme in str(row.get("themes", "")).split(",") if theme.strip()]
+        related_theme_scores = [float(theme_scores[theme]) for theme in themes if theme in theme_scores]
+        theme_score = sum(related_theme_scores) / len(related_theme_scores) if related_theme_scores else 50.0
+        flow_score = float(row.get("flow_score", 0.0))
+        momentum_score = (
+            normalize(float(row.get("return_5d", 0.0)), -5.0, 10.0)
+            + normalize(float(row.get("return_20d", 0.0)), -10.0, 20.0)
+            + normalize(float(row.get("relative_5d", 0.0)), -4.0, 8.0)
+        ) / 3
+
+        intraday = intraday_by_ticker.get(ticker, {})
+        intraday_score = float(intraday.get("breakout_score", 50.0))
+        exit_signal = str(intraday.get("exit_signal", "Watch"))
+        risk_penalty = {"Exit": 20.0, "Trim": 10.0, "Watch": 3.0, "Hold": 0.0}.get(exit_signal, 3.0)
+
+        congress = congress_by_ticker.get(ticker, _neutral_disclosure_score())
+        insider = insider_by_ticker.get(ticker, _neutral_disclosure_score())
+        integrated_score = (
+            flow_score * 0.25
+            + theme_score * 0.15
+            + momentum_score * 0.15
+            + intraday_score * 0.20
+            + float(congress["score"]) * 0.10
+            + float(insider["score"]) * 0.10
+            + min(100.0, max(0.0, float(market_score))) * 0.05
+            - risk_penalty
+        )
+        integrated_score = min(100.0, max(0.0, integrated_score))
+
+        recommendations.append(
+            {
+                "ticker": ticker,
+                "themes": ", ".join(themes),
+                "integrated_score": integrated_score,
+                "rating": _integrated_rating(integrated_score, exit_signal),
+                "flow_score": flow_score,
+                "theme_score": theme_score,
+                "momentum_score": momentum_score,
+                "intraday_score": intraday_score,
+                "congress_score": float(congress["score"]),
+                "insider_score": float(insider["score"]),
+                "market_score": float(market_score),
+                "exit_signal": exit_signal,
+                "open_price": float(intraday.get("session_open", row.get("open_price", 0.0))),
+                "last_price": float(intraday.get("last_price", row.get("last_price", 0.0))),
+                "open_to_current_pct": float(intraday.get("day_return", row.get("open_to_current_pct", 0.0))),
+                "congress_buys": int(congress["buys"]),
+                "congress_sales": int(congress["sales"]),
+                "insider_buys": int(insider["buys"]),
+                "insider_sales": int(insider["sales"]),
+                "reason": integrated_recommendation_reason(
+                    flow_score=flow_score,
+                    theme_score=theme_score,
+                    momentum_score=momentum_score,
+                    intraday_score=intraday_score,
+                    congress=congress,
+                    insider=insider,
+                    exit_signal=exit_signal,
+                ),
+            }
+        )
+    return sorted(recommendations, key=lambda item: float(item["integrated_score"]), reverse=True)[:limit]
+
+
+def integrated_recommendation_reason(
+    *,
+    flow_score: float,
+    theme_score: float,
+    momentum_score: float,
+    intraday_score: float,
+    congress: Mapping[str, object],
+    insider: Mapping[str, object],
+    exit_signal: str,
+) -> str:
+    reasons = [
+        f"flow {flow_score:.0f}",
+        f"theme {theme_score:.0f}",
+        f"momentum {momentum_score:.0f}",
+        f"5m {intraday_score:.0f}",
+    ]
+    if int(congress["buys"]) or int(congress["sales"]):
+        reasons.append(f"Congress {int(congress['buys'])}B/{int(congress['sales'])}S")
+    if int(insider["buys"]) or int(insider["sales"]):
+        reasons.append(f"insider {int(insider['buys'])}B/{int(insider['sales'])}S")
+    if exit_signal in {"Trim", "Exit"}:
+        reasons.append(f"risk signal: {exit_signal}")
+    return "; ".join(reasons) + "."
+
+
+def _disclosure_scores(rows, value_fields: tuple[str, ...]) -> dict[str, dict[str, float | int]]:
+    aggregates: dict[str, dict[str, float | int]] = {}
+    for row in _iter_records(rows):
+        ticker = str(row.get("ticker", "")).upper()
+        side = str(row.get("trade_side", ""))
+        if not ticker or side not in {"Purchase", "Sale"}:
+            continue
+        value = _disclosure_value(row, value_fields)
+        aggregate = aggregates.setdefault(ticker, {"buy_value": 0.0, "sale_value": 0.0, "buys": 0, "sales": 0})
+        if side == "Purchase":
+            aggregate["buy_value"] = float(aggregate["buy_value"]) + value
+            aggregate["buys"] = int(aggregate["buys"]) + 1
+        else:
+            aggregate["sale_value"] = float(aggregate["sale_value"]) + value
+            aggregate["sales"] = int(aggregate["sales"]) + 1
+
+    results = {}
+    for ticker, aggregate in aggregates.items():
+        buy_value = float(aggregate["buy_value"])
+        sale_value = float(aggregate["sale_value"])
+        total_value = buy_value + sale_value
+        if total_value:
+            score = 50.0 + 50.0 * ((buy_value - sale_value) / total_value)
+        else:
+            total_count = int(aggregate["buys"]) + int(aggregate["sales"])
+            score = 50.0 if not total_count else 50.0 + 50.0 * (
+                (int(aggregate["buys"]) - int(aggregate["sales"])) / total_count
+            )
+        results[ticker] = {**aggregate, "score": min(100.0, max(0.0, score))}
+    return results
+
+
+def _disclosure_value(row: Mapping[str, object], value_fields: tuple[str, ...]) -> float:
+    values = [float(row.get(field, 0.0) or 0.0) for field in value_fields]
+    positive = [value for value in values if value > 0]
+    if not positive:
+        return 0.0
+    return sum(positive) / len(positive) if len(value_fields) > 1 else positive[0]
+
+
+def _neutral_disclosure_score() -> dict[str, float | int]:
+    return {"buy_value": 0.0, "sale_value": 0.0, "buys": 0, "sales": 0, "score": 50.0}
+
+
+def _integrated_rating(score: float, exit_signal: str) -> str:
+    if exit_signal == "Exit":
+        return "Caution"
+    if score >= 75:
+        return "High Conviction"
+    if score >= 65:
+        return "Positive"
+    if score >= 50:
+        return "Neutral"
+    return "Caution"
+
+
 def build_breakout_candidates(component_rows, limit: int = 5) -> list[dict[str, object]]:
     """Rank single-stock breakout candidates independent of their theme basket score."""
     candidates = []

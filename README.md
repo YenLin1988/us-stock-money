@@ -4,6 +4,18 @@
 
 This project follows the same monitoring logic as AI Bubble Monitor: collect market data, convert noisy signals into normalized 0-100 scores, classify the current regime, archive history, and optionally trigger alerts.
 
+## App Navigation
+
+The Streamlit app uses native multi-page navigation:
+
+| Page | Purpose |
+|---|---|
+| Overview | Complete dashboard and all monitoring sections |
+| Recommendations | Integrated rankings with factor-level scores |
+| Signals | Market timing, 5-minute breakouts, and exit signals |
+| Disclosures | Congressional STOCK Act and SEC Form 4 transactions |
+| Market Research | Theme rotation, watchlist, sectors, benchmarks, and component tables |
+
 ## What It Tracks Now
 
 The dashboard is built around thematic baskets instead of only classic sectors:
@@ -77,6 +89,20 @@ The dashboard ranks five component stocks or ETFs by combining:
 - dollar-volume and volume-confirmation signals
 
 These candidates are research signals only. They are not buy/sell instructions.
+
+## Integrated Recommendations
+
+The dashboard also produces a transparent integrated ranking that combines all available signals:
+
+- component money flow: 25%
+- related theme strength: 15%
+- daily momentum and relative strength: 15%
+- 5-minute breakout setup: 20%
+- recent congressional disclosures: 10%
+- recent SEC Form 4 insider activity: 10%
+- broad-market timing: 5%
+
+Missing disclosure activity receives a neutral score rather than a penalty. An active 5-minute `Trim` or `Exit` signal applies an additional risk deduction. Congressional and insider filings are delayed supporting signals and never override weak market or price action by themselves.
 
 ## Market Timing Signal
 
