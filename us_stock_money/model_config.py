@@ -33,11 +33,11 @@ THEME_BASKETS = {
     },
     "CPU / Advanced Packaging": {
         "description": "CPU designers, foundry, packaging, and semiconductor equipment",
-        "tickers": ["AMD", "INTC", "ARM", "TSM", "AMKR", "ASML", "AMAT", "KLAC", "ONTO", "ASX", "ALAB", "ALMU", "PENG", "TXN", "NXPI", "ON", "MCHP"],
+        "tickers": ["AMD", "INTC", "ARM", "TSM", "AMKR", "ASML", "IFNNY", "AMAT", "KLAC", "ONTO", "ASX", "ALAB", "ALMU", "PENG", "TXN", "NXPI", "ON", "MCHP"],
     },
     "Space": {
         "description": "Launch, satellites, space connectivity, and geospatial intelligence",
-        "tickers": ["RKLB", "ASTS", "LUNR", "IRDM", "PL", "VSAT", "RDW", "SIDU"],
+        "tickers": ["SPCX", "RKLB", "ASTS", "LUNR", "IRDM", "PL", "VSAT", "RDW", "SIDU"],
     },
     "Drones / Autonomy": {
         "description": "Unmanned systems, defense autonomy, and tactical aerospace",
@@ -83,7 +83,7 @@ WATCHLIST_TICKERS = [
     "AMAT", "ALAB", "ALMU", "APP", "CRWD", "CRWV", "EOSE", "ETN", "GLW",
     "PL", "RDW", "RKLB", "SNDK", "SIDU", "VST", "AXTI", "NBIS", "OSS",
     "MP", "UUUU", "TSLA", "TSM", "AVAV", "RCAT", "RTX", "FLNC", "TXN",
-    "NXPI", "ON", "MCHP", "HPE",
+    "NXPI", "ON", "MCHP", "HPE", "AMKR", "IFNNY", "SPCX",
 ]
 
 THEME_GROUPS = {
