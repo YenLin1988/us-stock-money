@@ -29,7 +29,7 @@ The dashboard is built around thematic baskets instead of only classic sectors:
 | Optical Communication | COHR, LITE, CIEN, FN, AAOI, NOK, MRVL, GLW, KOPN |
 | Electric Power / Grid | CEG, VST, NEE, ETN, PWR, GEV, GNRC, BE, EOSE, TSLA |
 | CPU / Advanced Packaging | AMD, INTC, ARM, TSM, AMKR, ASML, AMAT, KLAC, ONTO, ASX, ALAB |
-| Space | RKLB, ASTS, LUNR, IRDM, PL, VSAT, RDW, SIDU |
+| Space | SPCX, RKLB, ASTS, LUNR, IRDM, PL, VSAT, RDW, SIDU |
 | Drones / Autonomy | AVAV, KTOS, RCAT, ONDS, LMT, NOC |
 | Rare Earth / Strategic Metals | REMX, MP, UUUU, LAC, ALB, SCCO |
 | Nuclear Energy | NLR, URA, CCJ, CEG, BWXT, OKLO, SMR, LEU, VST |
@@ -252,6 +252,7 @@ us-stock-money/
     storage.py                  # SQLite history store
   tests/                        # Unit tests for core logic
   docs/ARCHITECTURE.md          # Runtime architecture
+  docs/REALTIME_DARK_POOL_API_PLAN.md # Planned paid real-time dark-pool integration
   .github/workflows/hourly_monitor.yml
   requirements.txt
 ```
