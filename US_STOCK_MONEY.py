@@ -142,6 +142,52 @@ st.markdown(
         text-decoration: none;
     }
     .analysis-action:hover { text-decoration: underline; }
+    .mobile-card {
+        border: 1px solid #30363d;
+        border-radius: 10px;
+        padding: 12px 14px;
+        margin-bottom: 10px;
+        background: #111820;
+    }
+    .mobile-card-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 8px;
+    }
+    .mobile-ticker { font-size: 1.3rem; font-weight: 700; color: #f0f6fc; }
+    .mobile-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        margin-top: 5px;
+        font-size: 0.95rem;
+        color: #e6edf3;
+    }
+    .mobile-theme-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 12px;
+        margin-bottom: 6px;
+        border: 1px solid #30363d;
+        border-radius: 8px;
+        background: #111820;
+        font-size: 0.95rem;
+    }
+    .mobile-theme-name { font-weight: 700; color: #f0f6fc; }
+    .mobile-theme-stats { color: #8b949e; font-size: 0.84rem; white-space: nowrap; }
+    @media (max-width: 640px) {
+        .block-container {
+            padding-left: 0.9rem !important;
+            padding-right: 0.9rem !important;
+            padding-top: 2.4rem !important;
+        }
+        [data-testid="stMetricValue"] { font-size: 1.35rem !important; }
+        h1 { font-size: 1.5rem !important; }
+        h2, h3 { font-size: 1.15rem !important; }
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -688,6 +734,102 @@ def load_disclosure_context() -> tuple[pd.DataFrame, pd.DataFrame]:
         st.warning(f"SEC insider trade data is temporarily unavailable: {exc}")
         insider_df = pd.DataFrame()
     return congress_df, insider_df
+
+
+def mobile_page() -> None:
+    """Compact vertical layout for phone reading during the Taiwan-evening session."""
+    st.title("US STOCK MONEY")
+    context = load_market_page_context()
+    if context is None:
+        return
+
+    intraday_df = context["intraday_df"]
+    latest_time = str(intraday_df["last_time"].iloc[0]) if not intraday_df.empty else ""
+    if latest_time:
+        st.caption(f"行動版 · 最新 5m 資料：{taipei_time(latest_time)}")
+    else:
+        st.caption("行動版 · 台灣晚間操作視角")
+
+    render_entry_gate(context["entry_gate"])
+
+    if not intraday_df.empty:
+        bench_cols = st.columns(len(intraday_df))
+        for index, (_, row) in enumerate(intraday_df.iterrows()):
+            day_change = float(row.get("day_change_pct", row.get("day_return", 0.0)))
+            bench_cols[index].metric(
+                str(row["ticker"]),
+                fmt_price(float(row["last_price"])),
+                f"{day_change:+.2f}%",
+            )
+
+    st.subheader("資金流向")
+    theme_df = context["intraday_theme_df"]
+    if theme_df is None or theme_df.empty:
+        st.info("盤中主題資料暫時無法取得。")
+    else:
+        def _theme_row_html(row) -> str:
+            day_change = float(row["day_change_pct"])
+            pct_class = "positive-pct" if day_change >= 0 else "negative-pct"
+            return (
+                '<div class="mobile-theme-row">'
+                f'<span class="mobile-theme-name">{row["theme"]}</span>'
+                '<span style="text-align:right;">'
+                f'<span class="{pct_class}">{day_change:+.2f}%</span><br>'
+                f'<span class="mobile-theme-stats">vs SPY {float(row["vs_spy_pct"]):+.2f}% · RVOL {float(row["rvol"]):.1f}x</span>'
+                "</span></div>"
+            )
+
+        st.markdown("**流入最強**", unsafe_allow_html=True)
+        st.markdown("".join(_theme_row_html(row) for _, row in theme_df.head(5).iterrows()), unsafe_allow_html=True)
+        st.markdown("**流出最重**", unsafe_allow_html=True)
+        st.markdown(
+            "".join(_theme_row_html(row) for _, row in theme_df.tail(3).sort_values("intraday_flow_score").iterrows()),
+            unsafe_allow_html=True,
+        )
+
+    st.subheader("盤中候選")
+    if context["entry_gate"].status == "no_entry":
+        st.caption("⚠️ 今日以觀望為主，以下僅供追蹤，不建議進場。")
+    candidates = build_intraday_breakout_candidates(context["intraday_component_df"], limit=3)
+    log_intraday_picks(candidates)
+    if not candidates:
+        st.info("盤中個股資料暫時無法取得。")
+    for candidate in candidates:
+        day_return = float(candidate["day_return"])
+        pct_class = "positive-pct" if day_return >= 0 else "negative-pct"
+        signal = str(candidate["exit_signal"])
+        st.markdown(
+            f"""
+            <div class="mobile-card">
+                <div class="mobile-card-head">
+                    <span class="mobile-ticker">{candidate["ticker"]}</span>
+                    <span class="exit-signal {exit_signal_class(signal)}">{signal}</span>
+                </div>
+                <div class="small-label">{candidate["themes"]}</div>
+                <div class="mobile-row"><span class="small-label">價格（開盤後）</span>
+                    <span>{fmt_price(float(candidate["last_price"]))} <span class="{pct_class}">{day_return:+.2f}%</span></span></div>
+                <div class="mobile-row"><span class="small-label">跳空 / vs SPY</span>
+                    <span>{float(candidate["gap_pct"]):+.2f}% / {float(candidate["vs_spy_pct"]):+.2f}%</span></div>
+                <div class="mobile-row"><span class="small-label">RVOL / 30分動能</span>
+                    <span>{float(candidate["rvol"]):.1f}x / {float(candidate["return_30m"]):+.2f}%</span></div>
+                <div class="mobile-row"><span class="small-label">參考進場 / 停損</span>
+                    <span>{fmt_price(float(candidate["entry_ref"]))} / {fmt_price(float(candidate["stop_ref"]))}</span></div>
+                <div class="small-label" style="margin-top:7px; line-height:1.45;">{candidate["reason"]}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    store = HistoryStore(Path("data/flow_history.sqlite3"))
+    summary = pick_hit_rate_summary(pd.DataFrame(store.load_intraday_picks()))
+    if summary["evaluated"]:
+        st.subheader("命中率")
+        stat1, stat2, stat3 = st.columns(3)
+        stat1.metric("已驗證", int(summary["evaluated"]))
+        stat2.metric("當日勝率", f"{summary['win_rate']:.0f}%")
+        stat3.metric("當日均報酬", f"{summary['avg_return']:+.2f}%")
+
+    st.caption("研究用途，非投資建議。資料來自 Yahoo Finance，可能延遲或不完整。")
 
 
 def decision_dashboard_page() -> None:
@@ -2998,6 +3140,7 @@ if __name__ == "__main__":
         {
             "Dashboard": [
                 st.Page(decision_dashboard_page, title="Decision Dashboard", url_path="overview", default=True),
+                st.Page(mobile_page, title="📱 行動版 Mobile", url_path="mobile"),
                 st.Page(recommendations_page, title="Recommendations", url_path="recommendations"),
                 st.Page(signals_page, title="Signals", url_path="signals"),
                 st.Page(dark_pool_page, title="Dark Pool Activity", url_path="dark-pool"),
