@@ -5,3 +5,4 @@ numpy>=1.24.0
 plotly>=5.18.0
 requests>=2.31.0
 beautifulsoup4>=4.12.0
+# Force environment rebuild after adding us_stock_money.pick_tracker (2026-07-02)
