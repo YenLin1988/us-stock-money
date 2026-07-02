@@ -30,7 +30,8 @@ def download_intraday_prices(
 
 
 def download_intraday_component_prices(period: str = "5d", interval: str = "5m") -> pd.DataFrame:
-    tickers = sorted({ticker for basket in THEME_BASKETS.values() for ticker in basket["tickers"]})
+    # SPY is included so intraday component strength can be measured against the market.
+    tickers = sorted({ticker for basket in THEME_BASKETS.values() for ticker in basket["tickers"]} | {"SPY"})
     return download_prices(period=period, interval=interval, tickers=tickers)
 
 
@@ -343,100 +344,222 @@ def benchmark_table(data: pd.DataFrame) -> pd.DataFrame:
 def build_intraday_market_table(data: pd.DataFrame) -> pd.DataFrame:
     close = _field(data, "Close")
     volume = _field(data, "Volume")
+    highs, lows = _optional_fields(data)
     rows = []
     for ticker, label in INTRADAY_BENCHMARKS.items():
         if ticker not in close or ticker not in volume:
             continue
-        prices = close[ticker].dropna()
-        vols = volume[ticker].reindex(prices.index).fillna(0)
-        if len(prices) < 12:
-            continue
-
-        latest_ts = prices.index[-1]
-        latest_session = _session_slice(prices, latest_ts)
-        latest_session_vol = vols.reindex(latest_session.index).fillna(0)
-        if len(latest_session) < 3:
-            continue
-
-        last_price = float(latest_session.iloc[-1])
-        open_price = float(latest_session.iloc[0])
-        day_return = (last_price / open_price - 1) * 100 if open_price else 0.0
-        return_30m = _pct_change(latest_session, 6)
-        return_60m = _pct_change(latest_session, 12)
-        vwap = _vwap(latest_session, latest_session_vol)
-        below_vwap = last_price < vwap if vwap else False
-        recent_volume = float(latest_session_vol.tail(6).mean())
-        base_volume = float(vols.tail(120).mean()) if len(vols) >= 120 else float(vols.mean())
-        volume_trend = ((recent_volume / base_volume) - 1) * 100 if base_volume else 0.0
-
-        rows.append(
-            {
-                "ticker": ticker,
-                "name": label,
-                "last_time": str(latest_ts),
-                "last_price": last_price,
-                "session_open": open_price,
-                "day_return": day_return,
-                "return_30m": return_30m,
-                "return_60m": return_60m,
-                "vwap": vwap,
-                "below_vwap": below_vwap,
-                "volume_trend": volume_trend,
-            }
+        metrics = _intraday_ticker_metrics(
+            close[ticker].dropna(),
+            volume[ticker],
+            highs[ticker].dropna() if highs is not None and ticker in highs else None,
+            lows[ticker].dropna() if lows is not None and ticker in lows else None,
         )
+        if metrics is None:
+            continue
+        rows.append({"ticker": ticker, "name": label, **metrics})
     return pd.DataFrame(rows)
 
 
 def build_intraday_component_table(data: pd.DataFrame) -> pd.DataFrame:
     close = _field(data, "Close")
     volume = _field(data, "Volume")
+    highs, lows = _optional_fields(data)
+
+    spy_day_change = 0.0
+    if "SPY" in close and "SPY" in volume:
+        spy_metrics = _intraday_ticker_metrics(close["SPY"].dropna(), volume["SPY"])
+        if spy_metrics is not None:
+            spy_day_change = float(spy_metrics["day_change_pct"])
+
     rows = []
     theme_tickers = sorted({ticker for basket in THEME_BASKETS.values() for ticker in basket["tickers"]})
     for ticker in theme_tickers:
         if ticker not in close or ticker not in volume:
             continue
-        prices = close[ticker].dropna()
-        vols = volume[ticker].reindex(prices.index).fillna(0)
-        if len(prices) < 12:
+        metrics = _intraday_ticker_metrics(
+            close[ticker].dropna(),
+            volume[ticker],
+            highs[ticker].dropna() if highs is not None and ticker in highs else None,
+            lows[ticker].dropna() if lows is not None and ticker in lows else None,
+        )
+        if metrics is None:
             continue
-
-        latest_ts = prices.index[-1]
-        latest_session = _session_slice(prices, latest_ts)
-        latest_session_vol = vols.reindex(latest_session.index).fillna(0)
-        if len(latest_session) < 3:
-            continue
-
-        last_price = float(latest_session.iloc[-1])
-        session_open = float(latest_session.iloc[0])
-        day_return = (last_price / session_open - 1) * 100 if session_open else 0.0
-        return_30m = _pct_change(latest_session, 6)
-        return_60m = _pct_change(latest_session, 12)
-        vwap = _vwap(latest_session, latest_session_vol)
-        vwap_gap_pct = (last_price / vwap - 1) * 100 if vwap else 0.0
-        below_vwap = last_price < vwap if vwap else False
-        recent_volume = float(latest_session_vol.tail(6).mean())
-        base_volume = float(vols.tail(120).mean()) if len(vols) >= 120 else float(vols.mean())
-        volume_trend = ((recent_volume / base_volume) - 1) * 100 if base_volume else 0.0
-        recent_dollar_volume = float((latest_session.tail(6) * latest_session_vol.tail(6)).sum())
-
         rows.append(
             {
                 "ticker": ticker,
                 "themes": ", ".join(_themes_for_ticker(ticker)),
-                "last_time": str(latest_ts),
-                "last_price": last_price,
-                "session_open": session_open,
-                "day_return": day_return,
-                "return_30m": return_30m,
-                "return_60m": return_60m,
-                "vwap": vwap,
-                "vwap_gap_pct": vwap_gap_pct,
-                "below_vwap": below_vwap,
-                "volume_trend": volume_trend,
-                "recent_dollar_volume_m": recent_dollar_volume / 1_000_000,
+                **metrics,
+                "vs_spy_pct": float(metrics["day_change_pct"]) - spy_day_change,
             }
         )
     return pd.DataFrame(rows)
+
+
+def build_intraday_theme_table(component_df: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate intraday component metrics into a theme-level money-flow board.
+
+    Answers "where is money flowing right now" at the theme level: median
+    session change including the overnight gap, strength versus SPY,
+    time-of-day relative volume, and the share of components holding VWAP.
+    """
+    columns = [
+        "theme",
+        "component_count",
+        "day_change_pct",
+        "vs_spy_pct",
+        "gap_pct",
+        "rvol",
+        "pct_above_vwap",
+        "intraday_flow_score",
+        "top_component",
+        "weak_component",
+    ]
+    if component_df is None or component_df.empty:
+        return pd.DataFrame(columns=columns)
+
+    rows = []
+    for theme, config in THEME_BASKETS.items():
+        members = component_df[component_df["ticker"].isin(config["tickers"])]
+        if members.empty:
+            continue
+        day_change = float(members["day_change_pct"].median())
+        vs_spy = float(members["vs_spy_pct"].median())
+        gap = float(members["gap_pct"].median())
+        rvol = float(members["rvol"].median())
+        pct_above_vwap = float((~members["below_vwap"].astype(bool)).mean() * 100)
+        flow_score = (
+            normalize(vs_spy, -2.0, 2.0) * 0.35
+            + normalize(day_change, -2.5, 2.5) * 0.25
+            + pct_above_vwap * 0.25
+            + normalize(rvol, 0.4, 2.0) * 0.15
+        )
+        ranked = members.sort_values("day_change_pct", ascending=False)
+        rows.append(
+            {
+                "theme": theme,
+                "component_count": int(len(members)),
+                "day_change_pct": day_change,
+                "vs_spy_pct": vs_spy,
+                "gap_pct": gap,
+                "rvol": rvol,
+                "pct_above_vwap": pct_above_vwap,
+                "intraday_flow_score": flow_score,
+                "top_component": str(ranked.iloc[0]["ticker"]),
+                "weak_component": str(ranked.iloc[-1]["ticker"]),
+            }
+        )
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return pd.DataFrame(rows).sort_values("intraday_flow_score", ascending=False).reset_index(drop=True)
+
+
+def _optional_fields(data: pd.DataFrame) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
+    try:
+        return _field(data, "High"), _field(data, "Low")
+    except KeyError:
+        return None, None
+
+
+def _intraday_ticker_metrics(
+    prices: pd.Series,
+    volume: pd.Series,
+    highs: pd.Series | None = None,
+    lows: pd.Series | None = None,
+) -> dict[str, object] | None:
+    vols = volume.reindex(prices.index).fillna(0)
+    if len(prices) < 12:
+        return None
+
+    latest_ts = prices.index[-1]
+    latest_session = _session_slice(prices, latest_ts)
+    latest_session_vol = vols.reindex(latest_session.index).fillna(0)
+    if len(latest_session) < 3:
+        return None
+
+    last_price = float(latest_session.iloc[-1])
+    session_open = float(latest_session.iloc[0])
+    day_return = (last_price / session_open - 1) * 100 if session_open else 0.0
+
+    prior_bars = prices[prices.index < latest_session.index[0]]
+    prev_close = float(prior_bars.iloc[-1]) if not prior_bars.empty else 0.0
+    gap_pct = (session_open / prev_close - 1) * 100 if prev_close else 0.0
+    day_change_pct = (last_price / prev_close - 1) * 100 if prev_close else day_return
+
+    return_30m = _pct_change(latest_session, 6)
+    return_60m = _pct_change(latest_session, 12)
+    vwap = _vwap(latest_session, latest_session_vol)
+    vwap_gap_pct = (last_price / vwap - 1) * 100 if vwap else 0.0
+    below_vwap = last_price < vwap if vwap else False
+
+    recent_volume = float(latest_session_vol.tail(6).mean())
+    base_volume = float(vols.tail(120).mean()) if len(vols) >= 120 else float(vols.mean())
+    volume_trend = ((recent_volume / base_volume) - 1) * 100 if base_volume else 0.0
+    rvol = _time_of_day_rvol(vols, latest_session_vol)
+    recent_dollar_volume = float((latest_session.tail(6) * latest_session_vol.tail(6)).sum())
+
+    # Opening range: first 30 minutes (6 five-minute bars) of the latest session.
+    orb_bars = latest_session.head(6)
+    orb_high = float(orb_bars.max())
+    orb_low = float(orb_bars.min())
+    if highs is not None and not highs.empty:
+        session_highs = _session_slice(highs, latest_ts).head(6)
+        if not session_highs.empty:
+            orb_high = float(session_highs.max())
+    if lows is not None and not lows.empty:
+        session_lows = _session_slice(lows, latest_ts).head(6)
+        if not session_lows.empty:
+            orb_low = float(session_lows.min())
+
+    return {
+        "last_time": str(latest_ts),
+        "last_price": last_price,
+        "session_open": session_open,
+        "prev_close": prev_close,
+        "gap_pct": gap_pct,
+        "day_return": day_return,
+        "day_change_pct": day_change_pct,
+        "return_30m": return_30m,
+        "return_60m": return_60m,
+        "vwap": vwap,
+        "vwap_gap_pct": vwap_gap_pct,
+        "below_vwap": below_vwap,
+        "volume_trend": volume_trend,
+        "rvol": rvol,
+        "recent_dollar_volume_m": recent_dollar_volume / 1_000_000,
+        "orb_high": orb_high,
+        "orb_low": orb_low,
+        "above_orb_high": last_price > orb_high,
+    }
+
+
+def _time_of_day_rvol(vols: pd.Series, latest_session_vol: pd.Series) -> float:
+    """Cumulative session volume relative to the same elapsed time on prior sessions.
+
+    Intraday volume follows a U-shape, so comparing the first hour against a
+    flat all-day average always reads "elevated". Comparing against the same
+    time-of-day on prior sessions keeps the measure honest near the open.
+    """
+    bars_elapsed = len(latest_session_vol)
+    current_cum = float(latest_session_vol.sum())
+    if not bars_elapsed:
+        return 1.0
+    try:
+        latest_date = latest_session_vol.index[0].date()
+        grouped = vols.groupby([idx.date() for idx in vols.index])
+    except (AttributeError, TypeError):
+        return 1.0
+    prior_cums = [
+        float(session.head(bars_elapsed).sum())
+        for session_date, session in grouped
+        if session_date < latest_date and len(session) >= min(bars_elapsed, 3)
+    ]
+    if not prior_cums:
+        return 1.0
+    baseline = sum(prior_cums) / len(prior_cums)
+    if not baseline:
+        return 1.0
+    return current_cum / baseline
 
 
 def build_intraday_price_table(data: pd.DataFrame, tickers: list[str]) -> pd.DataFrame:
