@@ -40,6 +40,7 @@ from us_stock_money.market_data import (
     build_component_table,
     build_intraday_component_table,
     build_intraday_market_table,
+    build_intraday_theme_table,
     build_sector_table,
     build_theme_table,
     build_weekly_theme_trends,
@@ -47,6 +48,7 @@ from us_stock_money.market_data import (
     download_intraday_prices,
     download_prices,
 )
+from us_stock_money.pick_tracker import evaluate_intraday_picks, pick_hit_rate_summary
 from us_stock_money.model_config import ALL_TICKERS, MARKET_DATA_VERSION, WATCHLIST_TICKERS
 from us_stock_money.scoring import (
     broad_flow_score,
@@ -55,6 +57,7 @@ from us_stock_money.scoring import (
     build_top_recommendations,
     classify_regime,
     flow_delta,
+    intraday_entry_gate,
     intraday_market_signal,
     market_timing_signal,
     theme_group_scores,
@@ -159,13 +162,13 @@ def load_data(
     )
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=120)
 def load_intraday_data(market_data_version: str) -> pd.DataFrame:
     data = download_intraday_prices(period="5d", interval="5m")
     return build_intraday_market_table(data)
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=120)
 def load_intraday_component_data(market_data_version: str) -> pd.DataFrame:
     data = download_intraday_component_prices(period="5d", interval="5m")
     return build_intraday_component_table(data)
@@ -479,6 +482,9 @@ def load_market_page_context() -> dict[str, object] | None:
     broad = broad_flow_score(theme_scores)
     risk_on = groups.get("AI Compute Chain", 0.0)
     defensive = groups.get("Healthcare / Automation", 0.0)
+    intraday_theme_df = (
+        build_intraday_theme_table(intraday_component_df) if not intraday_component_df.empty else pd.DataFrame()
+    )
     return {
         "theme_df": theme_df,
         "component_df": component_df,
@@ -487,6 +493,7 @@ def load_market_page_context() -> dict[str, object] | None:
         "weekly_theme_df": weekly_theme_df,
         "intraday_df": intraday_df,
         "intraday_component_df": intraday_component_df,
+        "intraday_theme_df": intraday_theme_df,
         "theme_scores": theme_scores,
         "groups": groups,
         "broad": broad,
@@ -495,7 +502,178 @@ def load_market_page_context() -> dict[str, object] | None:
         "regime": classify_regime(broad, risk_on, defensive),
         "timing_signal": market_timing_signal(bench_df, broad, risk_on),
         "intraday_signal": intraday_market_signal(intraday_df),
+        "entry_gate": intraday_entry_gate(intraday_df, intraday_theme_df),
     }
+
+
+def taipei_time(last_time: object) -> str:
+    """Render an exchange timestamp alongside Taipei local time."""
+    try:
+        timestamp = pd.Timestamp(str(last_time))
+    except (ValueError, TypeError):
+        return str(last_time)
+    if timestamp.tzinfo is None:
+        return str(last_time)
+    return timestamp.tz_convert("Asia/Taipei").strftime("%m-%d %H:%M 台北")
+
+
+def is_live_session(last_time: object) -> bool:
+    """True when the latest 5m bar is recent enough to be today's live session."""
+    try:
+        timestamp = pd.Timestamp(str(last_time))
+    except (ValueError, TypeError):
+        return False
+    if timestamp.tzinfo is None:
+        return False
+    now = pd.Timestamp.now(tz=timestamp.tzinfo)
+    return pd.Timedelta(0) <= (now - timestamp) <= pd.Timedelta(minutes=30)
+
+
+def render_entry_gate(gate) -> None:
+    """Prominent go / no-go banner for tonight's session."""
+    if gate.status == "no_entry":
+        st.error(f"🚫 **{gate.title}** — {gate.message}")
+    elif gate.status == "caution":
+        st.warning(f"⚠️ **{gate.title}** — {gate.message}")
+    elif gate.status == "ok":
+        st.success(f"✅ **{gate.title}** — {gate.message}")
+    else:
+        st.info(f"**{gate.title}** — {gate.message}")
+    if gate.evidence:
+        with st.expander("進場判斷依據", expanded=gate.status == "no_entry"):
+            for item in gate.evidence:
+                st.caption(item)
+
+
+def render_intraday_theme_board(theme_df: pd.DataFrame) -> None:
+    """Theme-level intraday money-flow board: where capital is moving right now."""
+    st.subheader("盤中主題資金流向 (5m)")
+    if theme_df is None or theme_df.empty:
+        st.info("盤中主題資料暫時無法取得。")
+        return
+    chart_df = theme_df.sort_values("vs_spy_pct")
+    fig = px.bar(
+        chart_df,
+        x="vs_spy_pct",
+        y="theme",
+        orientation="h",
+        color="vs_spy_pct",
+        color_continuous_scale=["#f85149", "#8b949e", "#3fb950"],
+        color_continuous_midpoint=0.0,
+        labels={"vs_spy_pct": "當日相對 SPY (%)", "theme": ""},
+        title="主題當日表現 vs SPY（含跳空）",
+    )
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        height=420,
+        coloraxis_showscale=False,
+    )
+    st.plotly_chart(fig, width="stretch")
+    display = theme_df[
+        [
+            "theme",
+            "intraday_flow_score",
+            "day_change_pct",
+            "vs_spy_pct",
+            "gap_pct",
+            "rvol",
+            "pct_above_vwap",
+            "component_count",
+            "top_component",
+            "weak_component",
+        ]
+    ].rename(
+        columns={
+            "theme": "主題",
+            "intraday_flow_score": "盤中流向分數",
+            "day_change_pct": "當日漲跌%",
+            "vs_spy_pct": "vs SPY%",
+            "gap_pct": "跳空%",
+            "rvol": "同時段相對量",
+            "pct_above_vwap": "站上VWAP比例%",
+            "component_count": "成分數",
+            "top_component": "最強",
+            "weak_component": "最弱",
+        }
+    )
+    st.dataframe(
+        display.style.format(
+            {
+                "盤中流向分數": "{:.1f}",
+                "當日漲跌%": fmt_pct,
+                "vs SPY%": fmt_pct,
+                "跳空%": fmt_pct,
+                "同時段相對量": "{:.2f}x",
+                "站上VWAP比例%": "{:.0f}%",
+            }
+        ).map(
+            lambda value: "color: #3fb950; font-weight: 700" if value >= 0 else "color: #f85149; font-weight: 700",
+            subset=["當日漲跌%", "vs SPY%", "跳空%"],
+        ),
+        width="stretch",
+        hide_index=True,
+    )
+
+
+def log_intraday_picks(candidates: list[dict[str, object]]) -> int:
+    """Archive today's top live candidates once per session for hit-rate tracking."""
+    live = [candidate for candidate in candidates if is_live_session(candidate.get("last_time"))]
+    if not live:
+        return 0
+    picks = [
+        {
+            "pick_date": str(candidate.get("last_time", ""))[:10],
+            "ticker": str(candidate.get("ticker", "")),
+            "pick_price": float(candidate.get("last_price", 0.0)),
+            "breakout_score": float(candidate.get("breakout_score", 0.0)),
+            "themes": str(candidate.get("themes", "")),
+        }
+        for candidate in live[:5]
+    ]
+    store = HistoryStore(Path("data/flow_history.sqlite3"))
+    return store.save_intraday_picks(picks, picked_at=dt.datetime.now().strftime("%Y-%m-%d %H:%M"))
+
+
+def render_pick_tracker() -> None:
+    """Show archived intraday picks and their realized outcomes."""
+    with st.expander("盤中推薦命中率追蹤", expanded=False):
+        st.caption(
+            "開盤時段載入儀表板時會自動記錄當日前 5 名盤中候選（每日每檔只記第一次），"
+            "之後可對照當日與次日收盤驗證這套訊號在你的操作時段是否有正期望值。"
+        )
+        store = HistoryStore(Path("data/flow_history.sqlite3"))
+        if st.button("更新驗證結果", key="evaluate_picks"):
+            with st.spinner("下載日線收盤資料驗證中..."):
+                picks_df = evaluate_intraday_picks(store)
+        else:
+            picks_df = pd.DataFrame(store.load_intraday_picks())
+        if picks_df.empty:
+            st.info("尚無紀錄。美股盤中載入儀表板後會自動記錄當日推薦。")
+            return
+        summary = pick_hit_rate_summary(picks_df)
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col1.metric("已驗證筆數", int(summary["evaluated"]))
+        col2.metric("當日收盤勝率", f"{summary['win_rate']:.0f}%")
+        col3.metric("當日平均報酬", f"{summary['avg_return']:+.2f}%")
+        col4.metric("次日收盤勝率", f"{summary['next_day_win_rate']:.0f}%")
+        col5.metric("次日平均報酬", f"{summary['next_day_avg_return']:+.2f}%")
+        st.dataframe(
+            picks_df.style.format(
+                {
+                    "pick_price": fmt_price,
+                    "breakout_score": "{:.1f}",
+                    "close_price": fmt_price,
+                    "close_return_pct": fmt_pct,
+                    "next_close_price": fmt_price,
+                    "next_close_return_pct": fmt_pct,
+                },
+                na_rep="待驗證",
+            ),
+            width="stretch",
+            hide_index=True,
+        )
 
 
 def load_disclosure_context() -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -543,6 +721,8 @@ def decision_dashboard_page() -> None:
         ][:5]
     risks = build_risk_watchlist(all_candidates, limit=5)
 
+    render_entry_gate(context["entry_gate"])
+
     timing_signal = context["timing_signal"]
     banner_class = (
         "decision-danger"
@@ -566,6 +746,9 @@ def decision_dashboard_page() -> None:
     metric2.metric("Broad Money Flow", f"{context['broad']:.1f}/100")
     metric3.metric("Positive Candidates", len(recommended))
     metric4.metric("High-Risk Flags", sum(item["risk_level"] in {"Avoid", "High Risk"} for item in risks))
+
+    render_intraday_theme_board(context["intraday_theme_df"])
+    log_intraday_picks(build_intraday_breakout_candidates(context["intraday_component_df"], limit=5))
 
     st.subheader("Recommended Now")
     st.caption("Candidates with supportive flow and momentum, without an active 5m Trim or Exit signal.")
@@ -730,6 +913,8 @@ def decision_dashboard_page() -> None:
                 hide_index=True,
             )
 
+    render_pick_tracker()
+
 
 def recommendations_page() -> None:
     render_page_header(
@@ -842,6 +1027,8 @@ def signals_page() -> None:
     if context is None:
         return
 
+    render_entry_gate(context["entry_gate"])
+
     timing_signal = context["timing_signal"]
     intraday_signal = context["intraday_signal"]
     timing_col, intraday_col = st.columns(2)
@@ -859,10 +1046,20 @@ def signals_page() -> None:
     if not context["intraday_df"].empty:
         st.dataframe(format_intraday_table(context["intraday_df"]), width="stretch", hide_index=True)
 
+    render_intraday_theme_board(context["intraday_theme_df"])
+
     st.subheader("5m Breakout Candidates")
+    st.caption(
+        "排名依據橫斷面百分位：vs SPY 30%、同時段相對量 20%、開盤後漲幅 15%、30 分鐘動能 10%、"
+        "站上 VWAP 15%、突破開盤區間 10%。跳空後回落者扣分。已過濾近 30 分鐘美元成交額不足的標的。"
+    )
     breakouts = build_intraday_breakout_candidates(context["intraday_component_df"], limit=20)
+    log_intraday_picks(breakouts)
     if breakouts:
         breakout_df = pd.DataFrame(breakouts)
+        latest_time = breakout_df["last_time"].iloc[0] if "last_time" in breakout_df else ""
+        if latest_time:
+            st.caption(f"最新 5m K 棒：{latest_time}（{taipei_time(latest_time)}）")
         st.dataframe(
             breakout_df[
                 [
@@ -870,22 +1067,29 @@ def signals_page() -> None:
                     "themes",
                     "breakout_score",
                     "exit_signal",
+                    "gap_pct",
                     "day_return",
+                    "vs_spy_pct",
+                    "rvol",
                     "return_30m",
-                    "return_60m",
                     "vwap_gap_pct",
-                    "volume_trend",
+                    "above_orb_high",
+                    "entry_ref",
+                    "stop_ref",
                     "exit_reason",
                     "reason",
                 ]
             ].style.format(
                 {
                     "breakout_score": "{:.1f}",
+                    "gap_pct": fmt_pct,
                     "day_return": fmt_pct,
+                    "vs_spy_pct": fmt_pct,
+                    "rvol": "{:.2f}x",
                     "return_30m": fmt_pct,
-                    "return_60m": fmt_pct,
                     "vwap_gap_pct": fmt_pct,
-                    "volume_trend": fmt_pct,
+                    "entry_ref": fmt_price,
+                    "stop_ref": fmt_price,
                 }
             ),
             width="stretch",
@@ -893,6 +1097,8 @@ def signals_page() -> None:
         )
     else:
         st.warning("5m component data is unavailable.")
+
+    render_pick_tracker()
 
     st.subheader("Daily Flow Candidates")
     daily_candidates = build_top_recommendations(context["component_df"], context["theme_scores"], limit=20)
@@ -2205,6 +2411,10 @@ def main() -> None:
     delta_24h = flow_delta(history, broad, 24, now)
     timing_signal = market_timing_signal(bench_df, broad, risk_on)
     intraday_signal = intraday_market_signal(intraday_df)
+    intraday_theme_df = (
+        build_intraday_theme_table(intraday_component_df) if not intraday_component_df.empty else pd.DataFrame()
+    )
+    entry_gate = intraday_entry_gate(intraday_df, intraday_theme_df)
 
     alerts = evaluate_alerts(
         {
@@ -2256,6 +2466,9 @@ def main() -> None:
         for item in timing_signal.evidence:
             st.caption(item)
 
+    st.subheader("今晚可以進場嗎？")
+    render_entry_gate(entry_gate)
+
     st.subheader("5m Intraday Market Monitor")
     if intraday_signal.status == "intraday_stand_aside":
         st.error(f"**{intraday_signal.title}** - {intraday_signal.message}")
@@ -2269,6 +2482,8 @@ def main() -> None:
         st.metric("Intraday Timing Score", f"{intraday_signal.score:.0f}/100")
         for item in intraday_signal.evidence:
             st.caption(item)
+
+    render_intraday_theme_board(intraday_theme_df)
 
     st.subheader("Top 5 Integrated Recommendations")
     st.caption(
@@ -2355,8 +2570,12 @@ def main() -> None:
         )
 
     st.subheader("Top 5 5m Breakout Candidates")
+    log_intraday_picks(intraday_breakout_candidates)
     if intraday_breakout_candidates:
-        st.caption("Ranked from 5-minute candles: session move, 30/60 minute momentum, VWAP position, and live volume trend.")
+        st.caption(
+            "橫斷面排名：vs SPY、同時段相對量 (RVOL)、開盤後漲幅、30 分鐘動能、VWAP 與開盤區間位置。"
+            "entry_ref = max(開盤區間高點, VWAP)，stop_ref = 開盤區間低點，僅供參考。"
+        )
         breakout_cols = st.columns(5)
         for index, candidate in enumerate(intraday_breakout_candidates, start=1):
             day_return = float(candidate["day_return"])
@@ -2391,22 +2610,29 @@ def main() -> None:
             "last_time",
             "session_open",
             "last_price",
+            "gap_pct",
             "day_return",
+            "vs_spy_pct",
+            "rvol",
             "return_30m",
-            "return_60m",
             "vwap_gap_pct",
-            "volume_trend",
+            "above_orb_high",
+            "entry_ref",
+            "stop_ref",
             "recent_dollar_volume_m",
             "breakout_score",
             "exit_signal",
             "exit_reason",
             "reason",
         ]
-        pct_columns = ["day_return", "return_30m", "return_60m", "vwap_gap_pct", "volume_trend"]
+        pct_columns = ["gap_pct", "day_return", "vs_spy_pct", "return_30m", "vwap_gap_pct"]
         breakout_styled = breakout_display[breakout_columns].style.format(
             {
                 "session_open": fmt_price,
                 "last_price": fmt_price,
+                "rvol": "{:.2f}x",
+                "entry_ref": fmt_price,
+                "stop_ref": fmt_price,
                 "recent_dollar_volume_m": "${:,.0f}M",
                 "breakout_score": "{:.1f}",
                 **{column: fmt_pct for column in pct_columns},
@@ -2414,7 +2640,7 @@ def main() -> None:
         )
         breakout_styled = breakout_styled.map(
             lambda value: "color: #3fb950; font-weight: 700" if value >= 0 else "color: #f85149; font-weight: 700",
-            subset=["day_return", "return_30m", "return_60m", "vwap_gap_pct"],
+            subset=["gap_pct", "day_return", "vs_spy_pct", "return_30m", "vwap_gap_pct"],
         )
         breakout_styled = breakout_styled.map(
             lambda value: {
@@ -2761,6 +2987,8 @@ def main() -> None:
             hist_fig.update_layout(template="plotly_dark", paper_bgcolor="#0b0f14", plot_bgcolor="#0b0f14", height=320)
             hist_fig.update_yaxes(range=[0, 100])
             st.plotly_chart(hist_fig, width="stretch")
+
+    render_pick_tracker()
 
     st.caption("Research tool only. Theme flow scores are proxies derived from price and volume, not official fund-flow data.")
 

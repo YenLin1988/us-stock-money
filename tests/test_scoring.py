@@ -11,6 +11,7 @@ from us_stock_money.scoring import (
     classify_regime,
     flow_delta,
     group_scores,
+    intraday_entry_gate,
     intraday_market_signal,
     market_timing_signal,
     normalize,
@@ -256,7 +257,11 @@ class ScoringTests(unittest.TestCase):
                 "last_time": "2026-01-02 10:30:00-05:00",
                 "session_open": 5.10,
                 "last_price": 5.55,
+                "gap_pct": 1.2,
                 "day_return": 8.8,
+                "day_change_pct": 10.1,
+                "vs_spy_pct": 9.5,
+                "rvol": 2.4,
                 "return_30m": 3.4,
                 "return_60m": 6.2,
                 "vwap": 5.40,
@@ -264,6 +269,9 @@ class ScoringTests(unittest.TestCase):
                 "below_vwap": False,
                 "volume_trend": 240.0,
                 "recent_dollar_volume_m": 80.0,
+                "orb_high": 5.30,
+                "orb_low": 5.05,
+                "above_orb_high": True,
             },
             {
                 "ticker": "NOW",
@@ -271,7 +279,11 @@ class ScoringTests(unittest.TestCase):
                 "last_time": "2026-01-02 10:30:00-05:00",
                 "session_open": 1000,
                 "last_price": 1002,
+                "gap_pct": 0.0,
                 "day_return": 0.2,
+                "day_change_pct": 0.2,
+                "vs_spy_pct": -0.4,
+                "rvol": 0.8,
                 "return_30m": 0.1,
                 "return_60m": 0.4,
                 "vwap": 1003,
@@ -279,13 +291,71 @@ class ScoringTests(unittest.TestCase):
                 "below_vwap": True,
                 "volume_trend": 10.0,
                 "recent_dollar_volume_m": 40.0,
+                "orb_high": 1005.0,
+                "orb_low": 998.0,
+                "above_orb_high": False,
             },
         ]
         candidates = build_intraday_breakout_candidates(rows, limit=2)
         self.assertEqual(candidates[0]["ticker"], "NOK")
-        self.assertGreater(candidates[0]["breakout_score"], 90)
+        self.assertGreater(candidates[0]["breakout_score"], candidates[1]["breakout_score"])
+        self.assertGreater(candidates[0]["breakout_score"], 70)
         self.assertEqual(candidates[0]["exit_signal"], "Hold")
-        self.assertIn("last 30m momentum", candidates[0]["reason"])
+        self.assertIn("跑贏 SPY", candidates[0]["reason"])
+        self.assertAlmostEqual(candidates[0]["entry_ref"], 5.40)
+        self.assertAlmostEqual(candidates[0]["stop_ref"], 5.05)
+
+    def test_intraday_breakout_candidates_filter_illiquid_and_penalize_gap_fade(self):
+        rows = [
+            {
+                "ticker": "FADE",
+                "themes": "Test",
+                "session_open": 10.5,
+                "last_price": 10.2,
+                "gap_pct": 5.0,
+                "day_return": -2.9,
+                "vs_spy_pct": 1.0,
+                "rvol": 3.0,
+                "return_30m": -0.5,
+                "vwap": 10.3,
+                "below_vwap": True,
+                "recent_dollar_volume_m": 50.0,
+            },
+            {
+                "ticker": "TINY",
+                "themes": "Test",
+                "session_open": 2.0,
+                "last_price": 2.4,
+                "gap_pct": 0.0,
+                "day_return": 20.0,
+                "vs_spy_pct": 20.0,
+                "rvol": 5.0,
+                "return_30m": 5.0,
+                "vwap": 2.1,
+                "below_vwap": False,
+                "recent_dollar_volume_m": 0.4,
+            },
+            {
+                "ticker": "SOLID",
+                "themes": "Test",
+                "session_open": 100.0,
+                "last_price": 103.0,
+                "gap_pct": 0.5,
+                "day_return": 3.0,
+                "vs_spy_pct": 2.5,
+                "rvol": 1.8,
+                "return_30m": 0.8,
+                "vwap": 101.0,
+                "below_vwap": False,
+                "recent_dollar_volume_m": 30.0,
+            },
+        ]
+        candidates = build_intraday_breakout_candidates(rows, limit=5)
+        tickers = [row["ticker"] for row in candidates]
+        self.assertNotIn("TINY", tickers)  # below the dollar-volume floor
+        by_ticker = {row["ticker"]: row for row in candidates}
+        self.assertTrue(by_ticker["FADE"]["gap_fade"])
+        self.assertGreater(by_ticker["SOLID"]["breakout_score"], by_ticker["FADE"]["breakout_score"])
 
     def test_intraday_breakout_candidates_include_exit_signals(self):
         rows = [
@@ -371,6 +441,77 @@ class ScoringTests(unittest.TestCase):
         signal = intraday_market_signal(rows)
         self.assertEqual(signal.status, "intraday_recovery")
         self.assertIn("回穩訊號", signal.title)
+
+    @staticmethod
+    def _theme_row(theme, day_change, pct_above_vwap):
+        return {
+            "theme": theme,
+            "day_change_pct": day_change,
+            "vs_spy_pct": 0.0,
+            "pct_above_vwap": pct_above_vwap,
+        }
+
+    def test_entry_gate_blocks_broad_outflow_day(self):
+        market = [
+            {"ticker": "SPY", "day_change_pct": -1.2, "below_vwap": True},
+            {"ticker": "QQQ", "day_change_pct": -1.6, "below_vwap": True},
+            {"ticker": "IWM", "day_change_pct": -0.4, "below_vwap": False},
+        ]
+        themes = [
+            self._theme_row("Memory / HBM", -2.4, 10),
+            self._theme_row("Optical Communication", -1.9, 15),
+            self._theme_row("CPU / Advanced Packaging", -1.5, 20),
+            self._theme_row("AI Infrastructure", -2.0, 12),
+            self._theme_row("Medical / Devices", 0.3, 60),
+        ]
+        gate = intraday_entry_gate(market, themes)
+        self.assertEqual(gate.status, "no_entry")
+        self.assertIn("不建議進場", gate.title)
+        self.assertTrue(gate.semis_weak)
+        self.assertIn("半導體", gate.message)
+
+    def test_entry_gate_flags_semis_outflow_even_when_market_is_mixed(self):
+        market = [
+            {"ticker": "SPY", "day_change_pct": 0.1, "below_vwap": False},
+            {"ticker": "QQQ", "day_change_pct": -0.2, "below_vwap": False},
+            {"ticker": "IWM", "day_change_pct": 0.3, "below_vwap": False},
+        ]
+        themes = [
+            self._theme_row("Memory / HBM", -1.8, 25),
+            self._theme_row("Optical Communication", -1.2, 30),
+            self._theme_row("CPU / Advanced Packaging", -0.9, 35),
+            self._theme_row("AI Infrastructure", -1.4, 20),
+            self._theme_row("Medical / Devices", 0.8, 75),
+            self._theme_row("Defense / Aerospace", 0.6, 70),
+            self._theme_row("Nuclear Energy", 0.5, 65),
+            self._theme_row("Cybersecurity", 0.4, 60),
+            self._theme_row("Space", 0.2, 55),
+        ]
+        gate = intraday_entry_gate(market, themes)
+        self.assertEqual(gate.status, "caution")
+        self.assertTrue(gate.semis_weak)
+        self.assertIn("半導體鏈今日以流出為主", gate.message)
+
+    def test_entry_gate_allows_broad_inflow_day(self):
+        market = [
+            {"ticker": "SPY", "day_change_pct": 0.6, "below_vwap": False},
+            {"ticker": "QQQ", "day_change_pct": 0.9, "below_vwap": False},
+            {"ticker": "IWM", "day_change_pct": 0.4, "below_vwap": False},
+        ]
+        themes = [
+            self._theme_row("Memory / HBM", 1.4, 80),
+            self._theme_row("Optical Communication", 1.1, 75),
+            self._theme_row("CPU / Advanced Packaging", 0.7, 70),
+            self._theme_row("AI Infrastructure", 1.6, 85),
+            self._theme_row("Medical / Devices", -0.2, 45),
+        ]
+        gate = intraday_entry_gate(market, themes)
+        self.assertEqual(gate.status, "ok")
+        self.assertFalse(gate.semis_weak)
+
+    def test_entry_gate_handles_missing_theme_data(self):
+        gate = intraday_entry_gate([], [])
+        self.assertEqual(gate.status, "unavailable")
 
 
 if __name__ == "__main__":

@@ -172,7 +172,35 @@ The dashboard also includes a free Yahoo Finance 5-minute intraday monitor for S
 - **Intraday Recovery**: most major benchmarks stabilize above VWAP with positive short-term momentum.
 - **Intraday Wait**: conditions are mixed and need more confirmation.
 
-This monitor uses `period="5d"` and `interval="5m"` with a 5-minute Streamlit cache. Yahoo intraday data can be delayed, incomplete, or temporarily rate-limited.
+This monitor uses `period="5d"` and `interval="5m"` with a 2-minute Streamlit cache. Yahoo intraday data can be delayed, incomplete, or temporarily rate-limited.
+
+## Intraday Entry Gate (今晚可以進場嗎？)
+
+Built for deciding at the US open (Taiwan evening) whether tonight is worth trading at all. The gate combines benchmark pressure with theme-level breadth and produces one of:
+
+- **不建議進場 (no_entry)**: at least two of SPY/QQQ/IWM are down over 0.5% (gap included) below VWAP, or 70%+ of themes are falling with weak VWAP breadth.
+- **僅適合小倉位 (caution)**: mixed breadth, one weak benchmark, or a clearly weak semiconductor chain.
+- **可依候選清單選股 (ok)**: most themes rising and holding VWAP.
+
+The semiconductor chain (Memory / HBM, Optical Communication, CPU / Advanced Packaging, AI Infrastructure) gets a dedicated call-out whenever its average session change is below -1% or every semis theme is red, even on otherwise mixed days.
+
+## Intraday Theme Flow Board
+
+Intraday component metrics aggregate into a theme-level board that answers "where is money flowing right now":
+
+- median session change including the overnight gap
+- median strength versus SPY over the same session
+- time-of-day relative volume (RVOL) versus the same elapsed time on prior sessions
+- share of components trading above VWAP
+- a composite intraday flow score used for ranking
+
+## 5m Breakout Candidates
+
+Candidates are ranked cross-sectionally (percentile within today's universe): vs-SPY strength 30%, time-of-day RVOL 20%, post-open return 15%, 30-minute momentum 10%, above VWAP 15%, and above the 30-minute opening-range high 10%. Gap-and-fade setups (gap up over 1.5% then fading) are penalized. Rows with less than $3M of dollar volume in the last 30 minutes are filtered out so the top picks stay tradeable. Each candidate carries `entry_ref` (max of opening-range high and VWAP) and `stop_ref` (opening-range low) as reference levels only.
+
+## Pick Tracking and Hit Rate
+
+Whenever the dashboard is loaded during a live session, the top five 5m candidates are archived once per day per ticker (first snapshot wins). The 盤中推薦命中率追蹤 panel later fills in same-day and next-day closes so the win rate of the intraday engine over your own trading window can be measured instead of assumed.
 
 ## Congress Stock Trades
 

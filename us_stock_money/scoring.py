@@ -37,6 +37,20 @@ class IntradayMarketSignal:
     evidence: list[str]
 
 
+@dataclass(frozen=True)
+class IntradayEntryGate:
+    """Session-level go / no-go verdict for opening new positions today."""
+
+    status: str  # "no_entry" | "caution" | "ok" | "unavailable"
+    severity: str
+    title: str
+    message: str
+    evidence: list[str]
+    negative_theme_share: float
+    semis_day_change: float
+    semis_weak: bool
+
+
 def normalize(value: float, low: float, high: float) -> float:
     """Linearly map a value onto a clamped 0-100 score."""
     if high == low:
@@ -365,24 +379,50 @@ def build_breakout_candidates(component_rows, limit: int = 5) -> list[dict[str, 
     return sorted(candidates, key=lambda item: float(item["breakout_score"]), reverse=True)[:limit]
 
 
-def build_intraday_breakout_candidates(intraday_rows, limit: int = 5) -> list[dict[str, object]]:
-    """Rank 5-minute intraday breakout candidates for same-session monitoring."""
+def build_intraday_breakout_candidates(
+    intraday_rows,
+    limit: int = 5,
+    min_dollar_volume_m: float = 3.0,
+) -> list[dict[str, object]]:
+    """Rank 5-minute intraday breakout candidates for same-session monitoring.
+
+    Ranking is cross-sectional (percentile within today's universe) rather than
+    against fixed thresholds, so quiet days and hot days both produce a usable
+    ordering. Illiquid rows (last-30m dollar volume below the floor) are
+    excluded so top picks stay tradeable; if nothing passes the floor the
+    filter is relaxed instead of returning nothing.
+    """
+    rows = list(_iter_records(intraday_rows))
+    liquid = [row for row in rows if float(row.get("recent_dollar_volume_m", 0.0)) >= min_dollar_volume_m]
+    universe = liquid or rows
+
+    vs_spy_values = [float(row.get("vs_spy_pct", 0.0)) for row in universe]
+    rvol_values = [float(row.get("rvol", 1.0)) for row in universe]
+    day_values = [float(row.get("day_return", 0.0)) for row in universe]
+    mom_values = [float(row.get("return_30m", 0.0)) for row in universe]
+
     candidates = []
-    for row in _iter_records(intraday_rows):
+    for row in universe:
         day_return = float(row.get("day_return", 0.0))
-        return_30m = float(row.get("return_30m", 0.0))
-        return_60m = float(row.get("return_60m", 0.0))
-        vwap_gap_pct = float(row.get("vwap_gap_pct", 0.0))
-        volume_trend = float(row.get("volume_trend", 0.0))
-        above_vwap_score = 0.0 if bool(row.get("below_vwap", False)) else 100.0
+        gap_pct = float(row.get("gap_pct", 0.0))
+        vwap = float(row.get("vwap", 0.0))
+        orb_high = float(row.get("orb_high", 0.0))
+        orb_low = float(row.get("orb_low", 0.0))
+        below_vwap = bool(row.get("below_vwap", False))
+        above_orb_high = bool(row.get("above_orb_high", False))
+        gap_fade = gap_pct >= 1.5 and day_return <= -0.5
+
         breakout_score = (
-            normalize(day_return, 0.0, 5.0) * 0.25
-            + normalize(return_30m, 0.0, 3.0) * 0.25
-            + normalize(return_60m, 0.0, 5.0) * 0.15
-            + normalize(volume_trend, 0.0, 200.0) * 0.20
-            + normalize(vwap_gap_pct, 0.0, 3.0) * 0.10
-            + above_vwap_score * 0.05
+            _pct_rank(vs_spy_values, float(row.get("vs_spy_pct", 0.0))) * 0.30
+            + _pct_rank(rvol_values, float(row.get("rvol", 1.0))) * 0.20
+            + _pct_rank(day_values, day_return) * 0.15
+            + _pct_rank(mom_values, float(row.get("return_30m", 0.0))) * 0.10
+            + (0.0 if below_vwap else 100.0) * 0.15
+            + (100.0 if above_orb_high else 0.0) * 0.10
         )
+        if gap_fade:
+            breakout_score = max(0.0, breakout_score - 15.0)
+
         candidates.append(
             {
                 "ticker": row.get("ticker", ""),
@@ -390,14 +430,24 @@ def build_intraday_breakout_candidates(intraday_rows, limit: int = 5) -> list[di
                 "last_time": row.get("last_time", ""),
                 "session_open": float(row.get("session_open", 0.0)),
                 "last_price": float(row.get("last_price", 0.0)),
+                "gap_pct": gap_pct,
                 "day_return": day_return,
-                "return_30m": return_30m,
-                "return_60m": return_60m,
-                "vwap": float(row.get("vwap", 0.0)),
-                "vwap_gap_pct": vwap_gap_pct,
-                "below_vwap": bool(row.get("below_vwap", False)),
-                "volume_trend": volume_trend,
+                "day_change_pct": float(row.get("day_change_pct", day_return)),
+                "vs_spy_pct": float(row.get("vs_spy_pct", 0.0)),
+                "return_30m": float(row.get("return_30m", 0.0)),
+                "return_60m": float(row.get("return_60m", 0.0)),
+                "vwap": vwap,
+                "vwap_gap_pct": float(row.get("vwap_gap_pct", 0.0)),
+                "below_vwap": below_vwap,
+                "rvol": float(row.get("rvol", 1.0)),
+                "volume_trend": float(row.get("volume_trend", 0.0)),
                 "recent_dollar_volume_m": float(row.get("recent_dollar_volume_m", 0.0)),
+                "orb_high": orb_high,
+                "orb_low": orb_low,
+                "above_orb_high": above_orb_high,
+                "gap_fade": gap_fade,
+                "entry_ref": max(orb_high, vwap),
+                "stop_ref": orb_low if orb_low else vwap,
                 "breakout_score": breakout_score,
                 "reason": intraday_breakout_reason(row, breakout_score),
                 **intraday_exit_signal(row),
@@ -406,77 +456,96 @@ def build_intraday_breakout_candidates(intraday_rows, limit: int = 5) -> list[di
     return sorted(candidates, key=lambda item: float(item["breakout_score"]), reverse=True)[:limit]
 
 
+def _pct_rank(values: list[float], value: float) -> float:
+    """Midrank percentile of value within values, on a 0-100 scale."""
+    if not values:
+        return 50.0
+    below = sum(1 for item in values if item < value)
+    below_or_equal = sum(1 for item in values if item <= value)
+    return (below + below_or_equal) / (2 * len(values)) * 100
+
+
 def intraday_exit_signal(row: Mapping[str, object]) -> dict[str, str]:
     """Classify whether a 5m breakout candidate still deserves holding."""
     day_return = float(row.get("day_return", 0.0))
+    gap_pct = float(row.get("gap_pct", 0.0))
     return_30m = float(row.get("return_30m", 0.0))
     return_60m = float(row.get("return_60m", 0.0))
     vwap_gap_pct = float(row.get("vwap_gap_pct", 0.0))
     volume_trend = float(row.get("volume_trend", 0.0))
     below_vwap = bool(row.get("below_vwap", False))
 
+    if gap_pct >= 2.0 and day_return <= -1.0:
+        return {
+            "exit_signal": "Exit",
+            "exit_reason": "跳空高開後開盤即回落逾 1%，常見出貨型態。",
+        }
     if below_vwap and return_30m < 0:
         return {
             "exit_signal": "Exit",
-            "exit_reason": "Below VWAP with negative 30m momentum.",
+            "exit_reason": "跌破 VWAP 且近 30 分鐘動能轉負。",
         }
     if return_30m <= -0.75 and return_60m <= -0.50:
         return {
             "exit_signal": "Exit",
-            "exit_reason": "30m and 60m momentum both rolled over.",
+            "exit_reason": "30 分鐘與 60 分鐘動能同步走弱。",
         }
     if day_return >= 5 and return_30m < 0:
         return {
             "exit_signal": "Trim",
-            "exit_reason": "Large session gain, but short-term momentum is cooling.",
+            "exit_reason": "當日漲幅已大但短線動能降溫，先減碼。",
         }
     if below_vwap:
         return {
             "exit_signal": "Trim",
-            "exit_reason": "Price is below VWAP; reduce risk unless it reclaims quickly.",
+            "exit_reason": "價格位於 VWAP 之下，未快速收復前先降低風險。",
         }
     if return_30m < 0 and volume_trend < 0:
         return {
             "exit_signal": "Trim",
-            "exit_reason": "Momentum and 5m volume trend are fading together.",
+            "exit_reason": "動能與 5 分鐘量能同步降溫。",
         }
     if vwap_gap_pct >= 0 and return_30m >= 0:
         return {
             "exit_signal": "Hold",
-            "exit_reason": "Above VWAP with non-negative 30m momentum.",
+            "exit_reason": "站上 VWAP 且 30 分鐘動能未轉負。",
         }
     return {
         "exit_signal": "Watch",
-        "exit_reason": "Mixed 5m conditions; wait for VWAP or 30m confirmation.",
+        "exit_reason": "盤中訊號混合，等 VWAP 或 30 分鐘動能確認。",
     }
 
 
 def intraday_breakout_reason(row: Mapping[str, object], breakout_score: float) -> str:
     reasons = []
     day_return = float(row.get("day_return", 0.0))
+    gap_pct = float(row.get("gap_pct", 0.0))
+    vs_spy_pct = float(row.get("vs_spy_pct", 0.0))
+    rvol = float(row.get("rvol", 1.0))
     return_30m = float(row.get("return_30m", 0.0))
-    return_60m = float(row.get("return_60m", 0.0))
     vwap_gap_pct = float(row.get("vwap_gap_pct", 0.0))
-    volume_trend = float(row.get("volume_trend", 0.0))
     below_vwap = bool(row.get("below_vwap", False))
+    above_orb_high = bool(row.get("above_orb_high", False))
 
-    if day_return >= 2:
-        reasons.append(f"session move is {day_return:+.1f}%")
-    elif day_return > 0:
-        reasons.append(f"session move is positive at {day_return:+.1f}%")
-    if return_30m >= 1:
-        reasons.append(f"last 30m momentum is {return_30m:+.1f}%")
-    if return_60m >= 2:
-        reasons.append(f"last 60m momentum is {return_60m:+.1f}%")
+    if gap_pct >= 1.5 and day_return <= -0.5:
+        reasons.append(f"跳空 {gap_pct:+.1f}% 後回落 {day_return:+.1f}%，慎防假突破")
+    elif gap_pct >= 1.0 and day_return >= 0:
+        reasons.append(f"跳空 {gap_pct:+.1f}% 後守住開盤價")
+    if vs_spy_pct >= 0.5:
+        reasons.append(f"當日跑贏 SPY {vs_spy_pct:+.1f}%")
+    if rvol >= 1.5:
+        reasons.append(f"同時段相對量 {rvol:.1f}x")
+    if above_orb_high:
+        reasons.append("突破開盤 30 分鐘高點")
     if vwap_gap_pct > 0 and not below_vwap:
-        reasons.append(f"trading {vwap_gap_pct:+.1f}% above VWAP")
-    if volume_trend >= 50:
-        reasons.append(f"5m volume trend is {volume_trend:+.1f}%")
+        reasons.append(f"高於 VWAP {vwap_gap_pct:+.1f}%")
+    if return_30m >= 1:
+        reasons.append(f"近 30 分鐘動能 {return_30m:+.1f}%")
 
     if not reasons:
-        reasons.append(f"5m breakout setup score is {breakout_score:.1f}/100")
+        reasons.append(f"盤中綜合分數 {breakout_score:.1f}/100")
 
-    return "; ".join(reasons[:4]) + "."
+    return "; ".join(reasons[:4]) + "。"
 
 
 def breakout_reason(row: Mapping[str, object], breakout_score: float) -> str:
@@ -642,7 +711,8 @@ def intraday_market_signal(intraday_rows) -> IntradayMarketSignal:
 
     for row in rows:
         ticker = str(row.get("ticker", ""))
-        day_return = float(row.get("day_return", 0.0))
+        # Prefer the gap-aware change from the prior close when available.
+        day_return = float(row.get("day_change_pct", row.get("day_return", 0.0)))
         return_30m = float(row.get("return_30m", 0.0))
         return_60m = float(row.get("return_60m", 0.0))
         below_vwap = bool(row.get("below_vwap", False))
@@ -681,6 +751,98 @@ def intraday_market_signal(intraday_rows) -> IntradayMarketSignal:
         message="盤中賣壓與回穩條件都未充分確認，等待 SPY/QQQ/IWM 方向更清楚。",
         score=50.0,
         evidence=evidence[:5] or ["Intraday benchmark conditions are mixed."],
+    )
+
+
+SEMIS_THEMES = THEME_GROUPS["AI Compute Chain"]
+
+
+def intraday_entry_gate(intraday_market_rows, intraday_theme_rows) -> IntradayEntryGate:
+    """Decide whether today's session is worth entering at all.
+
+    Combines benchmark pressure with theme-level breadth so that a day where
+    most themes are bleeding produces an explicit "do not enter" warning, with
+    a dedicated call-out when the semiconductor chain is the weak spot.
+    """
+    market = list(_iter_records(intraday_market_rows))
+    themes = list(_iter_records(intraday_theme_rows))
+    if not themes:
+        return IntradayEntryGate(
+            status="unavailable",
+            severity="warning",
+            title="盤中主題資料暫時無法取得",
+            message="無法計算今日主題資金流向，先以大盤 5m 訊號與日線訊號為主。",
+            evidence=[],
+            negative_theme_share=0.0,
+            semis_day_change=0.0,
+            semis_weak=False,
+        )
+
+    weak_benchmarks = [
+        str(row.get("ticker", ""))
+        for row in market
+        if float(row.get("day_change_pct", row.get("day_return", 0.0))) <= -0.5 and bool(row.get("below_vwap", False))
+    ]
+    negative_themes = [row for row in themes if float(row.get("day_change_pct", 0.0)) < 0]
+    negative_share = len(negative_themes) / len(themes)
+    above_vwap_values = sorted(float(row.get("pct_above_vwap", 0.0)) for row in themes)
+    median_above_vwap = above_vwap_values[len(above_vwap_values) // 2]
+
+    semis = [row for row in themes if str(row.get("theme", "")) in SEMIS_THEMES]
+    semis_changes = [float(row.get("day_change_pct", 0.0)) for row in semis]
+    semis_day_change = sum(semis_changes) / len(semis_changes) if semis_changes else 0.0
+    semis_weak = bool(semis_changes) and (semis_day_change <= -1.0 or all(value < 0 for value in semis_changes))
+
+    evidence = [
+        f"{len(weak_benchmarks)}/3 檔大盤指數走弱（含跳空跌逾 0.5% 且低於 VWAP）" + (f"：{', '.join(weak_benchmarks)}" if weak_benchmarks else ""),
+        f"{len(negative_themes)}/{len(themes)} 個主題今日下跌",
+        f"主題中位數僅 {median_above_vwap:.0f}% 成分股站上 VWAP",
+    ]
+    if semis_changes:
+        evidence.append(
+            f"半導體鏈（記憶體/光通訊/CPU 封裝/AI 基建）今日平均 {semis_day_change:+.2f}%"
+            + ("，全數下跌" if all(value < 0 for value in semis_changes) else "")
+        )
+
+    if len(weak_benchmarks) >= 2 or (negative_share >= 0.7 and median_above_vwap < 40):
+        message = "大盤與多數主題同步走弱，今晚進場勝率偏低。建議觀望，等待止跌或資金明確回流再操作。"
+        if semis_weak:
+            message += "半導體相關類股流出特別明顯，記憶體、光通訊、CPU/封裝與 AI 基建先避開。"
+        return IntradayEntryGate(
+            status="no_entry",
+            severity="critical",
+            title="今日資金流出居多，不建議進場",
+            message=message,
+            evidence=evidence,
+            negative_theme_share=negative_share,
+            semis_day_change=semis_day_change,
+            semis_weak=semis_weak,
+        )
+
+    if negative_share >= 0.5 or len(weak_benchmarks) == 1 or semis_weak:
+        message = "部分主題仍有資金流入，但整體風險偏高。只考慮跑贏 SPY、量能放大且守住 VWAP 的標的，並縮小部位。"
+        if semis_weak:
+            message += "注意：半導體鏈今日以流出為主，該族群暫勿進場。"
+        return IntradayEntryGate(
+            status="caution",
+            severity="warning",
+            title="資金流向分歧，僅適合小倉位選股",
+            message=message,
+            evidence=evidence,
+            negative_theme_share=negative_share,
+            semis_day_change=semis_day_change,
+            semis_weak=semis_weak,
+        )
+
+    return IntradayEntryGate(
+        status="ok",
+        severity="info",
+        title="今日資金以流入為主，可依候選清單選股",
+        message="多數主題上漲且守住 VWAP。優先挑選盤中主題看板前段、同時段相對量 1.2x 以上的標的。",
+        evidence=evidence,
+        negative_theme_share=negative_share,
+        semis_day_change=semis_day_change,
+        semis_weak=semis_weak,
     )
 
 

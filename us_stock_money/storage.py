@@ -28,6 +28,23 @@ class HistoryStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS intraday_picks (
+                    pick_date TEXT NOT NULL,
+                    ticker TEXT NOT NULL,
+                    picked_at TEXT NOT NULL,
+                    pick_price REAL NOT NULL,
+                    breakout_score REAL NOT NULL,
+                    themes TEXT NOT NULL DEFAULT '',
+                    close_price REAL,
+                    close_return_pct REAL,
+                    next_close_price REAL,
+                    next_close_return_pct REAL,
+                    PRIMARY KEY (pick_date, ticker)
+                )
+                """
+            )
             conn.commit()
 
     def upsert_record(self, record: dict[str, Any]) -> None:
@@ -53,3 +70,86 @@ class HistoryStore:
                 (limit,),
             ).fetchall()
         return [json.loads(row[0]) for row in reversed(rows)]
+
+    def save_intraday_picks(self, picks: list[dict[str, Any]], picked_at: str) -> int:
+        """Archive intraday picks, keeping only the first snapshot per day per ticker.
+
+        The first logged pick is the actual decision point, so later refreshes
+        in the same session must not overwrite it (INSERT OR IGNORE).
+        """
+        saved = 0
+        with closing(self._connect()) as conn:
+            for pick in picks:
+                pick_date = str(pick.get("pick_date", ""))
+                ticker = str(pick.get("ticker", ""))
+                if not pick_date or not ticker:
+                    continue
+                cursor = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO intraday_picks
+                        (pick_date, ticker, picked_at, pick_price, breakout_score, themes)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        pick_date,
+                        ticker,
+                        picked_at,
+                        float(pick.get("pick_price", 0.0)),
+                        float(pick.get("breakout_score", 0.0)),
+                        str(pick.get("themes", "")),
+                    ),
+                )
+                saved += cursor.rowcount if cursor.rowcount > 0 else 0
+            conn.commit()
+        return saved
+
+    def load_intraday_picks(self, limit: int = 500) -> list[dict[str, Any]]:
+        columns = [
+            "pick_date",
+            "ticker",
+            "picked_at",
+            "pick_price",
+            "breakout_score",
+            "themes",
+            "close_price",
+            "close_return_pct",
+            "next_close_price",
+            "next_close_return_pct",
+        ]
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT {', '.join(columns)}
+                FROM intraday_picks
+                ORDER BY pick_date DESC, breakout_score DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(zip(columns, row, strict=True)) for row in rows]
+
+    def update_pick_outcomes(self, outcomes: list[dict[str, Any]]) -> int:
+        updated = 0
+        with closing(self._connect()) as conn:
+            for outcome in outcomes:
+                cursor = conn.execute(
+                    """
+                    UPDATE intraday_picks
+                    SET close_price = ?,
+                        close_return_pct = ?,
+                        next_close_price = ?,
+                        next_close_return_pct = ?
+                    WHERE pick_date = ? AND ticker = ?
+                    """,
+                    (
+                        outcome.get("close_price"),
+                        outcome.get("close_return_pct"),
+                        outcome.get("next_close_price"),
+                        outcome.get("next_close_return_pct"),
+                        str(outcome.get("pick_date", "")),
+                        str(outcome.get("ticker", "")),
+                    ),
+                )
+                updated += cursor.rowcount if cursor.rowcount > 0 else 0
+            conn.commit()
+        return updated

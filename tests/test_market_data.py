@@ -6,6 +6,7 @@ from us_stock_money.market_data import (
     build_component_table,
     build_intraday_component_table,
     build_intraday_price_table,
+    build_intraday_theme_table,
     build_weekly_theme_trends,
 )
 
@@ -53,6 +54,53 @@ class MarketDataTests(unittest.TestCase):
         self.assertGreater(row["return_30m"], 0)
         self.assertGreater(row["vwap_gap_pct"], 0)
         self.assertGreater(row["volume_trend"], 0)
+
+    @staticmethod
+    def _two_session_intraday_frame():
+        prior = pd.date_range("2026-01-02 09:30", periods=12, freq="5min")
+        latest = pd.date_range("2026-01-05 09:30", periods=12, freq="5min")
+        periods = prior.append(latest)
+        columns = pd.MultiIndex.from_product(
+            [["Close", "Volume"], ["MU", "SPY"]],
+            names=["Price", "Ticker"],
+        )
+        data = pd.DataFrame(index=periods, columns=columns, dtype=float)
+        # MU: prior session flat at 100, latest session gaps up to 104 and grinds higher.
+        data[("Close", "MU")] = [100.0] * 12 + [104.0 + 0.25 * index for index in range(12)]
+        # Latest-session volume runs at twice the prior session's same-time pace.
+        data[("Volume", "MU")] = [1_000_000.0] * 12 + [2_000_000.0] * 12
+        # SPY: unchanged across both sessions.
+        data[("Close", "SPY")] = [500.0] * 24
+        data[("Volume", "SPY")] = [10_000_000.0] * 24
+        return data
+
+    def test_intraday_component_table_measures_gap_rvol_and_spy_relative(self):
+        rows = build_intraday_component_table(self._two_session_intraday_frame())
+        row = rows[rows["ticker"] == "MU"].iloc[0]
+
+        self.assertAlmostEqual(row["prev_close"], 100.0)
+        self.assertAlmostEqual(row["gap_pct"], 4.0)  # 100 -> 104 overnight gap
+        self.assertGreater(row["day_change_pct"], row["day_return"])  # gap included
+        self.assertAlmostEqual(row["rvol"], 2.0)  # double the same-time volume pace
+        self.assertGreater(row["vs_spy_pct"], 0)  # SPY was flat
+        self.assertGreater(row["orb_high"], 0)
+        self.assertTrue(row["above_orb_high"])
+
+    def test_intraday_theme_table_aggregates_components(self):
+        component_df = build_intraday_component_table(self._two_session_intraday_frame())
+        theme_df = build_intraday_theme_table(component_df)
+
+        self.assertFalse(theme_df.empty)
+        memory_row = theme_df[theme_df["theme"] == "Memory / HBM"].iloc[0]
+        self.assertEqual(memory_row["component_count"], 1)
+        self.assertEqual(memory_row["top_component"], "MU")
+        self.assertGreater(memory_row["day_change_pct"], 0)
+        self.assertGreater(memory_row["intraday_flow_score"], 50)
+
+    def test_intraday_theme_table_handles_empty_input(self):
+        theme_df = build_intraday_theme_table(pd.DataFrame())
+        self.assertTrue(theme_df.empty)
+        self.assertIn("intraday_flow_score", theme_df.columns)
 
     def test_intraday_price_table_uses_latest_session_open_and_current_price(self):
         times = pd.to_datetime(
